@@ -1,4 +1,26 @@
 "use strict";
+/*
+ * Legacy Electron compatibility:
+ * Discord Host 1.0.9036 embeds a JavaScript runtime from before
+ * Promise.withResolvers was standardized. Keep this shim in the preload
+ * context because the network bridge below can execute independently of the
+ * page context. The generic `this` behavior matches the native static method.
+ */
+typeof Promise.withResolvers != "function" && Object.defineProperty(Promise, "withResolvers", {
+    configurable: !0,
+    writable: !0,
+    value: function() {
+        let e, t;
+        let r = new this((r, n) => {
+            e = r, t = n
+        });
+        return {
+            promise: r,
+            resolve: e,
+            reject: t
+        }
+    }
+});
 var xe = Object.create;
 var j = Object.defineProperty;
 var Ee = Object.getOwnPropertyDescriptor;
@@ -472,10 +494,49 @@ var {
     exposeInMainWorld: tt
 } = _.default.contextBridge, G, F, H = !1, A = et("developer", "devToolsWarning");
 typeof A != "boolean" && (A = !1);
+var legacyNotificationIPCWarningShown = !1;
+
+/*
+ * Discord's current renderer invokes the modern native notification event,
+ * while Host 1.0.9036 does not register that IPC handler. Convert only that
+ * known host-capability rejection into the `{delivered: false}` contract used
+ * by Discord's notification utility. Discord can then continue to its HTML5
+ * fallback instead of leaking an unhandled rejection for every real mention.
+ */
+function patchLegacyNotificationIPC(e) {
+    let t = e?.ipc;
+    if (!t || typeof t.invoke != "function" || t.invoke.__betterDiscordLegacyNotificationCompatibility) return;
+    let r = t.invoke.bind(t),
+        n = function(e, ...t) {
+            let n;
+            try {
+                n = r(e, ...t)
+            } catch (o) {
+                if (e !== "DISCORD_NOTIFICATIONS_SEND_NOTIFICATION" || !String(o?.message ?? o).includes("cannot invoke this event")) throw o;
+                return legacyNotificationIPCWarningShown || (legacyNotificationIPCWarningShown = !0, console.warn("[BetterDiscord:LegacyCompatibility] Host 1.0.9036 does not implement native notification delivery; Discord will use its HTML5 fallback.")), Promise.resolve({
+                    delivered: !1
+                })
+            }
+            return e !== "DISCORD_NOTIFICATIONS_SEND_NOTIFICATION" || !n || typeof n.then != "function" ? n : n.catch(o => {
+                if (!String(o?.message ?? o).includes("cannot invoke this event")) throw o;
+                return legacyNotificationIPCWarningShown || (legacyNotificationIPCWarningShown = !0, console.warn("[BetterDiscord:LegacyCompatibility] Host 1.0.9036 does not implement native notification delivery; Discord will use its HTML5 fallback.")), {
+                    delivered: !1
+                }
+            })
+        };
+    Object.defineProperty(n, "__betterDiscordLegacyNotificationCompatibility", {
+        value: !0
+    });
+    try {
+        t.invoke = n
+    } catch (o) {
+        console.warn("[BetterDiscord:LegacyCompatibility] DiscordNative.ipc is immutable; native notification rejection handling could not be installed.", o)
+    }
+}
 var rt = {
         ..._.default.contextBridge,
         exposeInMainWorld(e, t) {
-            e === "DiscordNative" && (t.window.USE_OSX_NATIVE_TRAFFIC_LIGHTS = process.platform === "darwin" && process.env.BETTERDISCORD_IN_APP_TRAFFIC_LIGHTS === "false", t.window.setDevtoolsCallbacks(() => {
+            e === "DiscordNative" && (patchLegacyNotificationIPC(t), t.window.USE_OSX_NATIVE_TRAFFIC_LIGHTS = process.platform === "darwin" && process.env.BETTERDISCORD_IN_APP_TRAFFIC_LIGHTS === "false", t.window.setDevtoolsCallbacks(() => {
                 H = !0, A || G?.()
             }, () => {
                 H = !1, A || F?.()
