@@ -1,7 +1,7 @@
 /**
- * @name PingNotification(VelEditQuick)
- * @author DaddyBoard V
- * @authorId 0
+ * @name PingNotification
+ * @author DaddyBoard
+ * @authorId 241334335884492810
  * @version 9.4.5
  * @description Show in-app notifications for anything you would hear a ping for.
  * @source https://github.com/DaddyBoard/BD-Plugins
@@ -14,10 +14,7 @@
  * This file tracks upstream PingNotification 9.4.5 at commit
  * 537f66e3bccc94b34de4f646c1a272eadb9f0846. The compatibility changes keep
  * asynchronous notification rendering failures attached to their Dispatcher
- * event instead of producing context-free unhandled promise rejections. Popup
- * roots consistently retain Discord's Mana provider during updates, contain
- * deferred React errors locally, and dispose partial roots without installing
- * global Promise, console, Dispatcher, or network interception.
+ * event instead of producing context-free unhandled promise rejections.
  */
 
 const { React, Webpack, ReactDOM, UI } = BdApi;
@@ -102,13 +99,12 @@ const config = {
                     id: "duration",
                     name: "Notification Duration",
                     note: "How long notifications stay on screen (in seconds)",
-                    // 「edit adjusted code」
-                    value: 600,
-                    min: 600,
-                    max: 36000,
-                    markers: [600, 3600, 36000],
+                    value: 15,
+                    min: 1,
+                    max: 60,
+                    markers: [1, 20, 40, 60],
                     units: "s",
-                    defaultValue: 600,
+                    defaultValue: 15,
                     stickToMarkers: false
                 },
                 {
@@ -473,7 +469,7 @@ const config = {
                     id: "autoSubscribeToAllServers",
                     name: "Auto Subscribe to All Servers on start",
                     note: "Discord recently made large servers load lazily, so this option will auto subscribe to all servers on start to ensure you don't miss any notifications. UNKNOWN IF THIS IS ENTIRELY SAFE. USE AT YOUR OWN RISK.",
-                    value: true
+                    value: false
                 },
                 {
                     type: "slider",
@@ -518,31 +514,6 @@ const config = {
         }
     ]
 };
-
-/**
- * Contains deferred React rendering failures inside an individual popup.
- * Promise-based wrappers cannot observe errors raised after `root.render()`
- * returns, so this boundary reports the failure and lets the plugin dispose of
- * only the affected notification without intercepting Discord-wide errors.
- */
-class NotificationRenderBoundary extends React.Component {
-    constructor(props) {
-        super(props);
-        this.state = { failed: false };
-    }
-
-    static getDerivedStateFromError() {
-        return { failed: true };
-    }
-
-    componentDidCatch(error, errorInfo) {
-        this.props.onRenderError(error, errorInfo);
-    }
-
-    render() {
-        return this.state.failed ? null : this.props.children;
-    }
-}
 
 module.exports = class PingNotification {
     constructor(meta) {
@@ -596,9 +567,6 @@ module.exports = class PingNotification {
         this.sessionMessages = [];
         this.testNotificationData = null;
         this.reportedNotificationRenderFailure = false;
-        this.reportedReactRenderFailure = false;
-        this.reportedManaProviderFailure = false;
-        this.reportedContainerFailure = false;
 
         this.onMessageReceived = this.onMessageReceived.bind(this);
         this.messageThreadCreateHandler = this.messageThreadCreateHandler.bind(this);
@@ -660,87 +628,17 @@ module.exports = class PingNotification {
         }
     }
 
-    /**
-     * Recreates the nearest verified React context provider required by
-     * Discord's message renderer. The lookup is bounded and runs only when a
-     * popup is rendered or updated, avoiding an unbounded fiber walk if the
-     * legacy client changes its application tree.
-     *
-     * @param {React.ReactNode} node Notification subtree to wrap.
-     * @returns {React.ReactNode} Provider-wrapped subtree, or the original node
-     * when a compatible provider cannot be identified.
-     */
     inMana(node) {
-        const appNode = document.querySelector("div[class^=app_] > div[class^=app_]");
-        let fiber = appNode ? BdApi.ReactUtils.getInternalInstance(appNode) : null;
-        let fallbackProvider = null;
+        let item = BdApi.ReactUtils.getInternalInstance(document.querySelector("div[class^=app_] > div[class^=app_]"));
 
-        for (let depth = 0; fiber && depth < 250; depth++, fiber = fiber.return) {
-            const contextValue = fiber.memoizedProps?.value;
-            if (!contextValue || typeof contextValue !== "object" || !("isWindowFocused" in contextValue)) continue;
-
-            const providerType = fiber.elementType ?? fiber.type;
-            const providerSymbol = String(providerType?.$$typeof ?? "");
-            const isVerifiedContextProvider = providerSymbol.includes("react.provider") || providerSymbol.includes("react.context") || Boolean(providerType?._context);
-            if (isVerifiedContextProvider) {
-                return React.createElement(providerType, { value: contextValue }, node);
-            }
-
-            fallbackProvider ??= { providerType, contextValue, depth };
+        while (!item.memoizedProps?.value?.isWindowFocused) {
+            item = item.return;
         }
 
-        if (fallbackProvider?.providerType) {
-            if (!this.reportedManaProviderFailure) {
-                this.reportedManaProviderFailure = true;
-                console.warn("[PingNotification:LegacyCompatibility] Mana-like value found on an unverified fiber; using the legacy wrapper as a fallback.", {
-                    fiberDepth: fallbackProvider.depth,
-                    providerType: typeof fallbackProvider.providerType
-                });
-            }
-            return React.createElement(fallbackProvider.providerType, { value: fallbackProvider.contextValue }, node);
-        }
-
-        if (!this.reportedManaProviderFailure) {
-            this.reportedManaProviderFailure = true;
-            console.error("[PingNotification:LegacyCompatibility] No Mana provider was found within the bounded application fiber search; popup rendering may be incomplete.");
-        }
-        return node;
-    }
-
-    /**
-     * Renders or updates one popup with identical provider and error-boundary
-     * behavior. This prevents updateNotification from accidentally discarding
-     * the provider installed during the initial render.
-     *
-     * @param {HTMLElement & {root: object}} notificationElement Popup host.
-     * @param {React.ReactElement} notificationComponent Popup component.
-     * @returns {void}
-     */
-    renderNotificationRoot(notificationElement, notificationComponent) {
-        const boundary = React.createElement(NotificationRenderBoundary, {
-            onRenderError: (error, errorInfo) => {
-                console.error("[PingNotification:LegacyCompatibility] React failed while rendering a popup.", {
-                    messageId: notificationElement.messageId,
-                    channelId: notificationElement.channelId,
-                    componentStack: errorInfo?.componentStack,
-                    error
-                });
-
-                if (!this.reportedReactRenderFailure) {
-                    this.reportedReactRenderFailure = true;
-                    UI.showNotification({
-                        title: "PingNotification",
-                        content: "Discord's message renderer failed inside a popup. The affected popup was removed; see the scoped console diagnostic.",
-                        type: "error",
-                        duration: 30000
-                    });
-                }
-
-                setTimeout(() => this.removeNotification(notificationElement), 0);
-            }
-        }, notificationComponent);
-
-        notificationElement.root.render(this.inMana(boundary));
+        return React.createElement(item.type, {
+            value: item.memoizedProps.value,
+            children: node
+        });
     }
 
     async start() {
@@ -835,6 +733,15 @@ module.exports = class PingNotification {
             Webpack.waitForModule(x => MemberAreaAvatarFilter(x?.type), { searchExports: true })
         ]);
 
+        const resolvedStartupModuleCount = [
+            NotificationUtils, NotificationSoundModule, MessageConstructor,
+            transitionTo, Dispatcher, MessageActions, Message, PopoutModule,
+            trailingModule, DiscordProgressBar, constructMessageObj,
+            ChannelConstructor, useStateFromStores, appSidePanelSelectors,
+            hasThreadElementModule, messageReferenceSelectors, MemberAreaAvatar
+        ].filter(Boolean).length;
+        console.debug(`[PingNotification:LegacyCompatibility] Startup module resolution completed (${resolvedStartupModuleCount}/17 modules available).`);
+
         trailing = trailingModule.trailing;
         updateDOMReferences();
 
@@ -886,8 +793,6 @@ module.exports = class PingNotification {
         if (this.settings.autoSubscribeToAllServers) {
             this.autoSubscribeToAllServers();
         }
-
-        console.log("[PingNotificationVel] Plugin started");
 
         this.patchContextMenus();
     }
@@ -1074,6 +979,7 @@ module.exports = class PingNotification {
 
     autoSubscribeToAllServers() {
         const servers = GuildStore.getGuildsArray();
+        console.warn(`[PingNotification] Auto-subscribe is enabled; dispatching one guild-subscription update for ${servers.length} guilds. Disable the advanced setting if broad typing/activity/thread subscriptions are not required.`);
         Dispatcher.dispatch({
             "type": "GUILD_SUBSCRIPTIONS_FLUSH",
             "subscriptions": {
@@ -1439,116 +1345,28 @@ module.exports = class PingNotification {
     }
 
     onMessageReceived(event, update) {
-        if (!event.message?.channel_id) return; // Stop if the event data is missing a valid channel location
-        if (event.message.type === 18) return; // Ignore thread creation system message (the automated message posted in the parent channel when a new thread is started)
-        //if (event.message.type === 21) return; // thread starter message (the first message inside a newly created thread, copied from the original)
+        if (!event.message?.channel_id) return;
+        if (event.message.type === 18) return;
+        if (event.message.type === 21) return;
 
         const channel = ChannelStore.getChannel(event.message.channel_id);
         const currentUser = UserStore.getCurrentUser();
-        if (!channel || event.message.author.id === currentUser.id) return; // Skip if the channel isn't cached or if I am the one who sent the message
+        if (!channel || event.message.author.id === currentUser.id) return;
 
         const notifyResult = this.shouldNotify(event.message, channel, currentUser);
-
-
-
-        // // ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-        // // Edit Test Debug
-        // // ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-        // // [event.message.type]
-        // // 0: DEFAULT (Standard text message)
-        // // 1: RECIPIENT_ADD (System: User added to Group DM)
-        // // 2: RECIPIENT_REMOVE (System: User removed from Group DM)
-        // // 3: CALL (System: Call started, missed, or ended)
-        // // 4: CHANNEL_NAME_CHANGE (System: Group DM name changed)
-        // // 5: CHANNEL_ICON_CHANGE (System: Group DM icon changed)
-        // // 6: CHANNEL_PINNED_MESSAGE (System: A message was pinned to the channel)
-        // // 7: USER_JOIN (System: "Welcome" message when a user joins a server)
-        // // 8: GUILD_BOOST (System: A user boosted the server)
-        // // 9: GUILD_BOOST_TIER_1 (System: Server reached Boost Tier 1)
-        // // 10: GUILD_BOOST_TIER_2 (System: Server reached Boost Tier 2)
-        // // 11: GUILD_BOOST_TIER_3 (System: Server reached Boost Tier 3)
-        // // 12: CHANNEL_FOLLOW_ADD (System: An announcement channel was followed)
-        // // 18: THREAD_CREATED (System: Notification that a thread was started; usually ignored by plugins)
-        // // 19: REPLY (A user message that is a reply to another message)
-        // // 20: CHAT_INPUT_COMMAND (A message generated by a Slash Command)
-        // // 21: THREAD_STARTER_MESSAGE (The "original" message contents mirrored inside a new thread)
-        // // 22: GUILD_INVITE_REMINDER (System: Prompt to invite friends to the server)
-        // // 23: CONTEXT_MENU_COMMAND (A message generated by an Apps/Context menu command)
-        // // 24: AUTO_MODERATION_ACTION (System: Message triggered by an AutoMod rule)
-        // // 25: ROLE_SUBSCRIPTION_PURCHASE (System: User purchased a Server Role subscription)
-        // // 26: INTERACTION_PREMIUM_UPSELL (System: Premium/Nitro upsell for an app)
-        // // 27: STAGE_START (System: A Stage channel started)
-        // // 28: STAGE_END (System: A Stage channel ended)
-        // // 29: STAGE_SPEAKER (System: Someone became a speaker on Stage)
-        // // 31: STAGE_TOPIC (System: The topic for a Stage was changed)
-        // // 32: GUILD_APPLICATION_PREMIUM_SUBSCRIPTION (System: Purchase of an App subscription)
-        // // 36: GUILD_INCIDENT_ALERT_MODE_ENABLED (System: Security/Raid mode turned on)
-        // // 37: GUILD_INCIDENT_ALERT_MODE_DISABLED (System: Security/Raid mode turned off)
-        // // 38: GUILD_INCIDENT_REPORT_RAID (System: A raid was reported in the server)
-        // // 39: GUILD_INCIDENT_REPORT_FALSE_ALARM (System: A raid report was marked as a false alarm)
-        // // 44: PURCHASE_NOTIFICATION (System: Notification of a digital purchase)
-        // // 46: POLL (A message that contains an interactive Poll)
-        // //
-        // // [channel.type]
-        // // 0: GUILD_TEXT (Standard text channel in a server)
-        // // 1: DM (Private message between two users)
-        // // 2: GUILD_VOICE (Text chat inside a voice channel)
-        // // 3: GROUP_DM (Private message with multiple users)
-        // // 4: GUILD_CATEGORY (Organizational folder used to group channels)
-        // // 5: GUILD_ANNOUNCEMENT (News channel that can be "followed" by other servers)
-        // // 10: ANNOUNCEMENT_THREAD (A temporary sub-channel inside a News channel)
-        // // 11: PUBLIC_THREAD (Standard thread or a "Post" inside a Forum channel)
-        // // 12: PRIVATE_THREAD (A thread visible only to invited members and moderators)
-        // // 13: GUILD_STAGE_VOICE (Voice channel for hosted "Stage" events)
-        // // 15: GUILD_FORUM (A channel that hosts separate "Posts" instead of a chat stream)
-        // // 16: GUILD_MEDIA (A forum variant designed specifically for image/video galleries)
-        // //
-        // // [Notif Setting (Self)]
-        // // (0=All, 1=Mentions, 2=None, 3=Inherit)
-
-        // // 1. Safely fetch settings and parent channel details
-        // const selfSetting = channel ? UserGuildSettingsStore.getChannelMessageNotifications(channel.guild_id, channel.id) : "N/A";
-        // const parentSetting = channel?.parent_id ? UserGuildSettingsStore.getChannelMessageNotifications(channel.guild_id, channel.parent_id) : "N/A";
-        // const parentChannel = channel?.parent_id ? ChannelStore.getChannel(channel.parent_id) : null;
-
-        // // 2. Determine Parent Type Label
-        // let parentTypeInfo = "No Parent";
-        // if (parentChannel) {
-        //     const pType = parentChannel.type;
-        //     const pTypeName = pType === 4 ? "CATEGORY" : (pType === 15 ? "FORUM" : (pType === 5 ? "NEWS" : "TEXT"));
-        //     parentTypeInfo = `#${parentChannel.name} (Type ${pType}: ${pTypeName})`;
-        // }
-
-        // // 3. Output enhanced debug block for specific Guild
-        // if (event.message.guild_id === "1330605345579597915") {
-        //     console.log(
-        //         `[PingNotificationVel] Message Event Received:\n` +
-        //         ` - Guild ID: ${event.message.guild_id || "DM"}\n` +
-        //         ` - Channel: #${channel?.name || "Unknown"} (${event.message.channel_id})\n` +
-        //         ` - Channel Type: ${channel?.type ?? "N/A"}\n` +
-        //         ` - Msg Type: ${event.message.type}\n` +
-        //         ` - Parent Info: ${parentTypeInfo}\n` +
-        //         ` - Notif Setting (Parent): ${parentSetting} (0=All, 1=Mentions, 3=Inherit)\n` +
-        //         ` - Notif Setting (Self): ${selfSetting}\n` +
-        //         ` - Msg Content: ${event.message.content?.slice(0, 50) || "(No Text Content)"}\n` +
-        //         ` - ShouldNotify?:`, notifyResult
-        //     );
-        // }
-        // // ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-
         if (this.settings.keywordOnlyMode) {
             if (notifyResult?.isKeywordMatch === true) {
                 this.showNotificationSafely(event.message, channel, notifyResult);
             }
 
-        } else { // Handle the standard notification flow when keyword-only mode is disabled
-            if (!update) { // Determine if this is a brand new message rather than an edit to an existing one
-                if (notifyResult && (notifyResult === true || notifyResult.notify === true)) { // Trigger popup if the logic returned a direct true or a successful notification object
+        } else {
+            if (!update) {
+                if (notifyResult && (notifyResult === true || notifyResult.notify === true)) {
                     this.showNotificationSafely(event.message, channel, notifyResult);
                 }
             }
-            else { // Handle messages that have been updated or edited by the author
-                if (notifyResult?.isKeywordMatch === true) { // Only notify on edits if the new content now includes a matched keyword
+            else {
+                if (notifyResult?.isKeywordMatch === true) {
                     this.showNotificationSafely(event.message, channel, notifyResult);
                 }
             }
@@ -1595,7 +1413,6 @@ module.exports = class PingNotification {
             NotificationSoundModule.playNotificationSound("message1", 0.4);
         }
     }
-
 
     async threadDeleteHandler(event) {
         this.sessionMessages.forEach(item => {
@@ -1694,8 +1511,6 @@ module.exports = class PingNotification {
         }
     }
 
-// ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-// 「edit extra code」
     shouldNotify(message, channel, currentUser) {
         let overrideStatus = false;
         if (this.settings.overrideDND === "on" || this.settings.overrideDND === "onWithSound") {
@@ -1705,187 +1520,6 @@ module.exports = class PingNotification {
         const shouldNotifyDiscordModule = NotificationUtils(message, message.channel_id, this.settings.sameChannelNotifications, overrideStatus);
         let keywordMatch = null;
 
-        
-
-
-// ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-// ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-        // ===== EARLY SKIP NOTIFICATION CONDITIONS ===== //
-        if (
-            // Skip if guild (category) or channel is muted
-            (channel.guild_id && UserGuildSettingsStore.isGuildOrCategoryOrChannelMuted(channel.guild_id, channel.id)) ||
-            // Skip ignored users
-            (RelationshipStore.isIgnored(message.author.id)) ||
-            // Skip own messages
-            (message.author.id === currentUser.id)
-        ) {
-           //console.log(`[PingNotificationEdit] EARLY SKIP NOTIFICATION CONDITION (GuildID: ${channel.guild_id}, ChannelID: ${channel.id})`);
-            return false;
-        }
-
-
-
-
-        // // Skip current channel if disabled
-        // (!this.settings.allowNotificationsInCurrentChannel && channel.id === SelectedChannelStore.getChannelId()) ||
-        // // Skip ignored users
-        // (RelationshipStore.isIgnored(message.author.id)) ||
-        // // Skip own messages
-        // (message.author.id === currentUser.id) ||
-        // // Skip if user is DND and hideDND is enabled
-        // (this.settings.hideDND && PresenceStore.getStatus(currentUser.id) === "dnd") ||
-        // // Skip ephemeral messages
-        // (message.flags && (message.flags & 64) === 64)
-
-// ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-// ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-        // Notifiy from post with those User IDs
-        const notifyUserIds = [
-            "1008803402584702986",  // Enaroh
-            "1093596385569427486",  // MochiPaws
-            "998825309015117895",   // Nokko
-            "1374681603514695700",  // MissMaize
-            "1065876631102685184",  // Astrea
-            "515249018067222570"    // Stin
-        ];
-        
-        // Notifiy from post from those chanenl IDs
-        const notifyChannelIds = [
-            "1373783386266664993", //ASMR        Chat
-            "1387515333056794654", //ASMR        Socials
-            "1075876642968305694", //Enaroh      Supporter
-            "986007203586670642",  //Kookster    staff
-            "1283829113211191316", //Kookster    mod-dev
-            "998828487374802985"  //Nokko       art
-        ];
-
-        // Notifiy messages having Keywords (case-insensitive)
-        const notifyKeywords = [
-            "loli ",
-            " loli",
-            "lolicon",
-            "enaroh ",
-            " enaroh",
-            "mochipaws ",
-            " mochipaws",
-            "nokko ",
-            " nokko",
-            "velgor"
-        ];
-        
-        // Blacklists 
-        const notifyKeywordBlacklistChannels = [
-            "945323045839593503",  // [Lewd Lounge 18+ 🎀🧺] - ꒰💌ˬ˚︰access-lfp
-            "881595899229388830",  // [Lewd Corner 🌸] - 🔨・moderation-logs
-            "1015782141231112292", // [～ Suteki Blossom 18+🐾🌸] - ・🌸╰-✦public-rp
-            "1136099352281092186", // [Hotel Lewd] - ⚡･ﾟquick-requests・੭
-            "1352809324816236595" // [ɴᴏᴋᴋᴏꜱ ʜᴜᴍᴀɴ ᴍᴇᴀᴛ ꜰᴀʀᴍ 🥩} - 𝗠𝘂𝗱𝗮𝗲
-        ];
-        
-        const notifyKeywordBlacklistServers = [
-            "465380712405532692", // Myst's Rank E Luck Club
-            "107238374137413632",  // My Anime Chat
-            "722738433545469962"  // Pokatto Space Station
-        ];
-
-        // Check hardcoded user/channel IDs
-        if (notifyUserIds.includes(message.author.id)) return true;
-        if (notifyChannelIds.includes(message.channel_id)) return true;
-
-        // Check hardcoded keywords
-        const content = message.content?.toLowerCase() || '';
-        if (notifyKeywords.some(keyword => content.includes(keyword.toLowerCase()))) {
-            // Check hardcoded blacklists
-            if (notifyKeywordBlacklistChannels.includes(channel.id)) return false;
-            if (channel.guild_id && notifyKeywordBlacklistServers.includes(channel.guild_id)) return false;
-            return true;
-        }
-
-
-        // Always notify for whitelisted users/channels (using cached arrays)
-        //if (this.cachedNotifyUserIds.includes(message.author.id)) return true;
-        //if (this.cachedNotifyChannelIds.includes(message.channel_id)) return true;
-
-
-
-        // Keyword check (with cached blacklists)
-        //if (this.cachedKeywords.some(keyword => 
-        //    message.content?.toLowerCase().includes(keyword)
-        //)) {
-        //    if (this.cachedBlacklistChannels.includes(channel.id)) return false;
-        //    if (channel.guild_id && this.cachedBlacklistServers.includes(channel.guild_id)) return false;
-        //    return true;
-        //}
-        
-
-// ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-// ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-        // -----------------------------------------------------------------------
-        // NEW: Thread Notification Logic
-        // Check manually if the user wants "All Messages" from this thread 
-        // or inherited from the parent.
-        // Note: threadForceNotify is used later as a trigger for the notification
-        // -----------------------------------------------------------------------
-        let threadForceNotify = false;
-        let threadSetting = -1;
-        let parentSetting = -1;
-        let guildSetting = -1;
-
-        // Check if channel is a Thread (10=NewsThread, 11=PublicThread, 12=PrivateThread)
-        const isThread = channel.type === 10 || channel.type === 11 || channel.type === 12;
-
-        if (isThread && channel.guild_id) {
-            // Get notification settings for this specific thread
-            // 0 = ALL_MESSAGES, 1 = ONLY_MENTIONS, 2 = NO_MESSAGES, 3 = NULL/INHERIT
-            threadSetting = UserGuildSettingsStore.getChannelMessageNotifications(channel.guild_id, channel.id);
-            guildSetting = UserGuildSettingsStore.getMessageNotifications(channel.guild_id);
-            console.log(`[PingNotification-Debug] Thread: "${channel.name}" | ForceNotify: ${threadForceNotify} | Settings -> Thread: ${threadSetting}, Parent: ${parentSetting}, GuildDefault: ${guildSetting} | ${channel.guild_id}`);
-        
-            // Scenario 1: The specific Thread is set to "All Messages"
-            if (threadSetting === 0) {
-                threadForceNotify = true;
-                
-                // console.log(`[PingNotification] Scenario A: Thread ${channel.name} is explicitly set to ALL_MESSAGES.`);
-            }
-            // Scenario 2: The Thread is set to "Default" (Inherit)
-            else if (threadSetting === 3 && channel.parent_id) {
-                parentSetting = UserGuildSettingsStore.getChannelMessageNotifications(channel.guild_id, channel.parent_id);
-                
-                if (parentSetting === 0) {
-                    threadForceNotify = true;
-                    // console.log(`[PingNotification] Scenario B: Thread inherits ALL_MESSAGES from Parent Channel.`);
-                } else if (parentSetting === 3 && guildSetting === 0) {
-                    threadForceNotify = true;
-                    // console.log(`[PingNotification] Scenario C: Thread and Parent inherit ALL_MESSAGES from Server Default.`);
-                }
-            }
-        }
-        // -----------------------------------------------------------------------
-
-
-// 「edit new code end」
-// ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-// ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        // -----------------------------------------------------------------------
-        // ORIGINAL KEYWORD & REGEX SEARCH LOGIC (Optimized)
-        // -----------------------------------------------------------------------
         if (this.settings.enableKeywordNotifications && 
             ((this.settings.keywordFilterMode === "blacklist" && !(this.settings.ignoredServersKeywords || '').includes(channel.guild_id)) && 
             (!(this.settings.ignoredChannelsKeywords || '').includes(channel.id))) || 
@@ -1893,14 +1527,6 @@ module.exports = class PingNotification {
             
             let hasKeywordMatch = false;
             
-            // Edit code added
-            // INITIALIZE ONCE: Move the search target here so both sub-blocks can use it.
-            // Also efficiently strip links if we are searching content only.
-            const searchTarget = (this.settings.keywordSearchScope === "entireMessage") 
-                ? JSON.stringify(message) 
-                : (message.content || "").replace(/(?:https?):\/\/[\n\S]+/g, ' ').replace(/\[.*?\]\(.*?\)/g, ' ');
-
-            // Check standard keywords
             if (this.settings.notificationKeywords) {
                 const keywords = this.settings.notificationKeywords
                     .split(",")
@@ -1935,7 +1561,6 @@ module.exports = class PingNotification {
                 });
             }
             
-            // Check REGEX patterns only if keywords didn't already find something
             if (!hasKeywordMatch && this.settings.regexPatterns) {
                 const regexPatterns = this.settings.regexPatterns
                     .split(";;;")
@@ -1975,98 +1600,23 @@ module.exports = class PingNotification {
             }
             
             if (hasKeywordMatch && this.settings.simulateAudioNotification && !shouldNotifyDiscordModule) {
-                NotificationSoundModule.playNotificationSound("message1", 0.5);
+                NotificationSoundModule.playNotificationSound("message1", 0.4);
             }
         }
 
-
-        // -----------------------------------------------------------------------
-        // FINAL DECISION GATE: Result Aggregation
-        // Combines all evaluation stages [Discord Utils] OR [Thread Logic] OR [Keyword Match]
-        // to determine if a notification popup is required.
-        //  1. Discord's native notification system flags the message.
-        //  2. Thread inheritance logic (Scenario A/B) forces a notification.
-        //  3. A keyword or regex pattern was detected in the content.
-        // -----------------------------------------------------------------------
-        if (shouldNotifyDiscordModule || threadForceNotify || keywordMatch) {
+        if (shouldNotifyDiscordModule || keywordMatch) {
             if (this.settings.overrideDND === "onWithSound") {
                 NotificationSoundModule.playNotificationSound("message1", 0.4);
             }
-            //TODO Try having keyword "thread" if Notification from a (public/private) thread?
             return { 
                 notify: true,
                 isKeywordMatch: !!keywordMatch,
                 matchedKeyword: keywordMatch
             };
         }
-
-        // 「edit debug code」
-       //////////////////////////////////////////////////////////////////////////////////////////////////////
-        //////////////////////////////////////////////////////////////////////////////////////////////////////
-        // Old PingNotificationEdits code before using betterDiscord API
-        
-        // if (!channel.guild_id) {
-        //     const isGroupDMMuted = UserGuildSettingsStore.isChannelMuted(null, channel.id);
-        //     const isUserBlocked = RelationshipStore.isBlocked(message.author.id);
-        //     //console.log(`[PingNotificationEdit] DM check: isGroupDMMuted=${isGroupDMMuted}, isUserBlocked=${isUserBlocked}`);
-        //     return !isGroupDMMuted && !isUserBlocked;
-        // }
-
-
-        // const channelOverride = UserGuildSettingsStore.getChannelMessageNotifications(channel.guild_id, channel.id);
-        // const guildDefault = UserGuildSettingsStore.getMessageNotifications(channel.guild_id);
-        // const finalSetting = channelOverride === 3 ? guildDefault : channelOverride;
-        // //console.log(`[PingNotificationEdit] Notification settings: channelOverride=${channelOverride}, guildDefault=${guildDefault}, finalSetting=${finalSetting} (GuildID: ${channel.guild_id}, ChannelID: ${channel.id})`);
-
-        // const isDirectlyMentioned = message.mentions?.some(mention => mention.id === currentUser.id);
-        // const isEveryoneMentioned = message.mention_everyone && 
-        //     !UserGuildSettingsStore.isSuppressEveryoneEnabled(channel.guild_id);
-
-        // let isRoleMentioned = false;
-        // if (message.mention_roles?.length > 0 && 
-        //     !UserGuildSettingsStore.isSuppressRolesEnabled(channel.guild_id)) {
-        //     const member = GuildMemberStore.getMember(channel.guild_id, currentUser.id);
-        //     if (member?.roles) {
-        //         isRoleMentioned = message.mention_roles.some(roleId => 
-        //             member.roles.includes(roleId)
-        //         );
-        //     }
-        // }
-
-        // const isMentioned = isDirectlyMentioned || isEveryoneMentioned || isRoleMentioned;
-        // //console.log(`[PingNotificationEdit] Mention check: isDirectlyMentioned=${isDirectlyMentioned}, isEveryoneMentioned=${isEveryoneMentioned}, isRoleMentioned=${isRoleMentioned}, isMentioned=${isMentioned} (GuildID: ${channel.guild_id}, ChannelID: ${channel.id})`);
-
-        // switch (finalSetting) {
-        //     case 0: 
-        //         //console.log(`[PingNotificationEdit] Allowed: All messages are enabled for this channel (GuildID: ${channel.guild_id}, ChannelID: ${channel.id})`);
-        //         return true;
-        //     case 1: 
-        //         //console.log(`[PingNotificationEdit] ${isMentioned ? "Allowed" : "Blocked"}: Only mentions are enabled for this channel (GuildID: ${channel.guild_id}, ChannelID: ${channel.id})`);
-        //         return isMentioned;
-        //     case 2: 
-        //         //console.log(`[PingNotificationEdit] Blocked: No messages are enabled for this channel (GuildID: ${channel.guild_id}, ChannelID: ${channel.id})`);
-        //         return false;
-        //     default: 
-        //         //console.log(`[PingNotificationEdit] Blocked: Unknown notification setting ${finalSetting} (GuildID: ${channel.guild_id}, ChannelID: ${channel.id})`);
-        //         return false;
-        // }
-        //////////////////////////////////////////////////////////////////////////////////////////////////////
-        //////////////////////////////////////////////////////////////////////////////////////////////////////
     }
 
     async showNotification(messageEvent, channel, notifyResult, threadChannel, realId) {
-        updateDOMReferences();
-        if (!container) {
-            if (!this.reportedContainerFailure) {
-                this.reportedContainerFailure = true;
-                console.error("[PingNotification:LegacyCompatibility] Popup container is unavailable; notification creation was skipped to avoid an orphaned React root.", {
-                    messageId: messageEvent?.id,
-                    channelId: channel?.id ?? messageEvent?.channel_id
-                });
-            }
-            return null;
-        }
-
         const notificationElement = BdApi.DOM.createElement('div', {
             className: 'ping-notification',
             'data-channel-id': channel.id // this is so MoreRoleColors can find the channelid to apply proper color :)
@@ -2084,8 +1634,8 @@ module.exports = class PingNotification {
         }
 
         if (message.messageReference) {
-            const referenceState = ReferencedMessageStore.getMessageByReference(message.messageReference);
-            if (!referenceState || referenceState.state !== 0) {
+
+            if (ReferencedMessageStore.getMessageByReference(message.messageReference).state !== 0) {
                 let referencedMessage = MessageStore.getMessage(message.messageReference.channel_id, message.messageReference.message_id);
 
                 if (!referencedMessage) {
@@ -2124,10 +1674,8 @@ module.exports = class PingNotification {
         notificationElement.style.setProperty('--ping-notification-z-index', isTestNotification ? '1003' : '1002');
 
         const root = createRoot(notificationElement);
-        notificationElement.root = root;
-        this.renderNotificationRoot(
-            notificationElement,
-            React.createElement(NotificationComponent, {
+        root.render(
+            this.inMana(React.createElement(NotificationComponent, {
                 message: message,
                 channel: channel,
                 settings: this.settings,
@@ -2157,19 +1705,22 @@ module.exports = class PingNotification {
                         this.removeNotification(notificationElement);
                     }
                 }
-            })
+            }))
         );
+        notificationElement.root = root;
 
         this.activeNotifications.push(notificationElement);
 
-        if (appElem && appElem.nextSibling) {
-            container.insertBefore(notificationElement, appElem.nextSibling);
-        } else if (appElem) {
-            container.appendChild(notificationElement);
-            console.debug("[PingNotification:LegacyCompatibility] Used the secondary popup insertion location.");
-        } else {
-            container.appendChild(notificationElement);
-            console.debug("[PingNotification:LegacyCompatibility] Used the fallback popup insertion location.");
+        if (container) {
+            if (appElem && appElem.nextSibling) {
+                container.insertBefore(notificationElement, appElem.nextSibling);
+            } else if (appElem) {
+                container.appendChild(notificationElement);
+                console.log("PingNotification: Imperfect insert location. Report to DaddyBoard please!");
+            } else {
+                container.appendChild(notificationElement);
+                console.log("PingNotification: fallback insert location. Report to DaddyBoard please!");
+            } 
         }
 
         void notificationElement.offsetHeight;
@@ -2184,37 +1735,33 @@ module.exports = class PingNotification {
         if (!String(message.id).includes("PingNotification") && this.settings.showHistoryButton) {
             this.sessionMessages.push({id: message.id, channel_id: channel.id, author: message.author.id});
         }
-        // ---------------------
-        
         return notificationElement;
     }
 
     removeNotification(notificationElement) {
-        if (!notificationElement) return;
-
-        if (this.settings.readChannelOnClose && notificationElement.manualClose && !notificationElement.isTestNotification) {
-            ChannelAckModule?.(notificationElement.channelId);
-        }
-
-        try {
-            notificationElement.root?.unmount();
-        } catch (error) {
-            console.warn("[PingNotification:LegacyCompatibility] Popup root was already unavailable during cleanup.", error);
-        }
-
-        notificationElement.parentNode?.removeChild(notificationElement);
-        this.activeNotifications = this.activeNotifications.filter(n => n !== notificationElement);
-        liveMessages = liveMessages.filter(id => id !== notificationElement.messageId);
-        this.adjustNotificationPositions();
-        if (notificationElement.isTestNotification && this.activeNotifications.every(n => !n.isTestNotification)) {
-            this.testNotificationData = null;
+        if (container && container.contains(notificationElement)) {
+            if (this.settings.readChannelOnClose && notificationElement.manualClose && !notificationElement.isTestNotification) {
+                ChannelAckModule(notificationElement.channelId);
+            }
+            notificationElement.root.unmount();
+            container.removeChild(notificationElement);
+            this.activeNotifications = this.activeNotifications.filter(n => n !== notificationElement);
+            liveMessages = liveMessages.filter(id => id !== notificationElement.messageId);
+            this.adjustNotificationPositions();
+            if (notificationElement.isTestNotification && this.activeNotifications.filter(n => n.isTestNotification).length === 0) {
+                this.testNotificationData = null;
+            }
         }
     }
 
     removeAllNotifications() {
-        [...this.activeNotifications].forEach(notification => this.removeNotification(notification));
+        this.activeNotifications.forEach(notification => {
+            if (container && container.contains(notification)) {
+                notification.root.unmount();
+                container.removeChild(notification);
+            }
+        });
         this.activeNotifications = [];
-        liveMessages = [];
     }
 
     adjustNotificationPositions() {
@@ -2231,7 +1778,7 @@ module.exports = class PingNotification {
         sortedNotifications.forEach((notification) => {
             const height = notification.offsetHeight;
             const transitionDuration = this.settings.readjustAnimationDuration / 1000;
-            notification.style.transition = `all ${transitionDuration}s ease-in-out`; // notification.style.transition = 'all 0.001s linear';
+            notification.style.transition = `all ${transitionDuration}s ease-in-out`;
             notification.style.position = 'fixed';
 
             if (isTop) {
@@ -2403,8 +1950,7 @@ module.exports = class PingNotification {
         
         notificationElement.message = updatedMessage;
         
-        this.renderNotificationRoot(
-            notificationElement,
+        notificationElement.root.render(
             React.createElement(NotificationComponent, {
                 message: updatedMessage,
                 channel: notificationChannel,
@@ -2439,8 +1985,15 @@ module.exports = class PingNotification {
         );
     }
 
-    async showTestNotification() {
-        this.activeNotifications.filter(n => n.isTestNotification).forEach(notification => this.removeNotification(notification));
+    showTestNotification() {
+        this.activeNotifications = this.activeNotifications.filter(n => {
+            if (n.isTestNotification) {
+                n.root.unmount();
+                document.body.removeChild(n);
+                return false;
+            }
+            return true;
+        });
         
         let testChannel = null;
         let testMessage = null;
@@ -2479,9 +2032,7 @@ module.exports = class PingNotification {
             };
         }
 
-        const notification = await this.showNotificationSafely(testMessage, testChannel);
-        if (!notification) return null;
-
+        const notification = this.showNotification(testMessage, testChannel);
         notification.isTestNotification = true;
         notification.testMessage = testMessage;
         notification.testChannel = testChannel;
@@ -3098,13 +2649,13 @@ function ProgressBar({ duration, isPaused, onComplete, showTimer, settings }) {
                         transform: shouldShowControl ? 'translateX(0)' : 'translateX(10px)',
                         transition: 'opacity 0.2s ease, transform 0.2s ease, color 0.2s ease',
                         color: localPause ? progressColorString : 'var(--text-default)',
-                        width: '15px',
-                        height: '15px'
+                        width: '14px',
+                        height: '14px'
                     }
                 }, 
                     React.createElement('svg', {
-                        width: '15',
-                        height: '15',
+                        width: '14',
+                        height: '14',
                         viewBox: '0 0 24 24',
                         fill: 'currentColor'
                     },
@@ -3115,8 +2666,7 @@ function ProgressBar({ duration, isPaused, onComplete, showTimer, settings }) {
                 ),
                 React.createElement('span', {
                     style: {
-                        // 「edit adjusted code」
-                        fontSize: '3px', // Reduce font size for timer numbers (since it forced to show to make pin feature work)
+                        fontSize: '12px',
                         fontWeight: 'bold',
                         color: progressColorString,
                         transition: 'color 0.5s ease'
@@ -3268,7 +2818,6 @@ class PopoutContent extends React.Component {
         const groupedMessages = [];
         let currentGroup = null;
 
-        // -------------------------- 「edit adjust code」 -------------
         messagesToDisplay.forEach((item) => {
             let message = MessageStore.getMessage(item.channel_id, item.id);
 
@@ -3304,11 +2853,10 @@ class PopoutContent extends React.Component {
                 currentGroup.messages.push(item);
             }
         });
-         // ----------------------------------------------------
 
         const sentinelPosition = displayCount - 3;
         let messageCounter = 0;
-
+        
 
         return React.createElement('div', {
             ref: this.scrollRef,
@@ -3385,7 +2933,6 @@ class PopoutContent extends React.Component {
                                 className: 'pn-hist-group-channel'
                             }, `#${channelName}`)
                         ]),
-                        // 「edit adjusted code」
                         ...group.messages.map((item, msgIndex) => {
                             const message = MessageStore.getMessage(item.channel_id, item.id);
                             const channel = ChannelStore.getChannel(item.channel_id);
@@ -3395,7 +2942,6 @@ class PopoutContent extends React.Component {
                             const elements = [];
                             
                             elements.push(React.createElement('div', {
-                                // 「edit adjusted code」
                                 key: `${item.id}-${msgIndex}`,
                                 className: 'pn-hist-popout-item',
                                 style: { position: 'relative' }
