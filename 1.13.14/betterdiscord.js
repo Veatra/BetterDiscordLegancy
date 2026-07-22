@@ -2362,34 +2362,50 @@ var xn = v(() => {
  * path requires it. Modern plugins commonly wait for functions identified by
  * source text, so waiting only for a future execution can deadlock plugin
  * startup forever. For filters carrying BetterDiscord's own source metadata,
- * execute only uninitialized factories which contain every requested token.
+ * execute only uninitialized factories which contain every requested token,
+ * stop as soon as the normal filter resolves, and cap probing at 25 factories.
  * Errors remain non-fatal: webpack's ordinary lazy listener stays registered.
  */
-function legacyLoadRegisteredFactories(a) {
-    let e = a?.strings ?? a?.searches ?? a?.props ?? a?.fields;
-    if (!Array.isArray(e) || e.length === 0) return 0;
-    let t = 0,
-        o = Object.keys(_.m);
-    for (let r of o) {
-        if (Object.prototype.hasOwnProperty.call(_.c, r)) continue;
-        let n;
+function legacyLoadRegisteredFactories(a, e) {
+    let t = a?.strings ?? a?.searches ?? a?.props ?? a?.fields;
+    if (!Array.isArray(t) || t.length === 0) return {
+        loaded: 0,
+        result: void 0
+    };
+    let o = 0,
+        r = Object.keys(_.m);
+    for (let n of r) {
+        if (Object.prototype.hasOwnProperty.call(_.c, n)) continue;
+        let s;
         try {
-            n = String(_.m[r])
+            s = String(_.m[n])
         } catch {
             continue
         }
-        let s = e.every(d => {
-            if (typeof d == "string") return n.includes(d);
-            if (!(d instanceof RegExp)) return !1;
-            return d.lastIndex = 0, d.test(n)
+        let d = t.every(l => {
+            if (typeof l == "string") return s.includes(l);
+            if (!(l instanceof RegExp)) return !1;
+            return l.lastIndex = 0, l.test(s)
         });
-        if (s) try {
-            _(r), t++
-        } catch (d) {
-            b.debug("WebpackModules", `Legacy eager load could not execute registered module ${r}; leaving the normal lazy listener active.`, d)
+        if (d) try {
+            _(n), o++;
+            let l = ne(a, e);
+            if (l) return {
+                loaded: o,
+                result: l
+            };
+            if (o >= 25) return b.warn("WebpackModules", "Legacy eager-load safety limit reached; leaving the normal lazy listener active."), {
+                loaded: o,
+                result: void 0
+            }
+        } catch (l) {
+            b.debug("WebpackModules", `Legacy eager load could not execute registered module ${n}; leaving the normal lazy listener active.`, l)
         }
     }
-    return t
+    return {
+        loaded: o,
+        result: void 0
+    }
 }
 
 function Fe(a, e = {}) {
@@ -2407,10 +2423,10 @@ function Fe(a, e = {}) {
         fatal: !1
     }));
     if (!u) {
-        let c = legacyLoadRegisteredFactories(a);
-        c > 0 && (b.debug("WebpackModules", `Legacy compatibility eagerly executed ${c} registered module candidate${c===1?"":"s"} for a pending source filter.`), u = ne(a, Object.assign({}, e, {
+        let c = legacyLoadRegisteredFactories(a, Object.assign({}, e, {
             fatal: !1
-        })))
+        }));
+        c.loaded > 0 && (b.debug("WebpackModules", `Legacy compatibility eagerly executed ${c.loaded} registered module candidate${c.loaded===1?"":"s"} for a pending source filter.`), u = c.result)
     }
     return u ? Promise.resolve(u) : (a = La(a), new Promise((c, f) => {
         let m = () => void hn.delete(h),

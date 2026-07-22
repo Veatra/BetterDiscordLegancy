@@ -152,3 +152,51 @@ owns port 6463; Discord recovers by selecting port 6464. ChannelTabs, Summarizer
 BDFDB selector warnings, overlay installation, Spotify authorization, and source
 map 404 messages are separate plugin, native-module, or service compatibility
 issues and do not block PingNotification's in-app popup.
+
+## Remaining startup messages and safety review
+
+The remaining startup output should not be globally suppressed. Most entries are
+owned by Discord or individual plugins, and intercepting `console`, Promise
+rejections, media playback, network requests, or Dispatcher errors broadly would
+hide real regressions:
+
+- Node's renderer `vm` deprecation, Long Animation Frames unavailability,
+  analytics rejection, spellchecker locale fallback, native dispatch timing,
+  overlay absence, Spotify authorization/WebSocket failures, unused preload
+  resources, missing source maps, and interrupted media playback originate from
+  the legacy host/current web-code mismatch. They are noisy but non-fatal.
+- BetterDiscord's `DOM.createElement`, remote `request`, and `Buffer` deprecations
+  identify older third-party plugin API usage. BetterDiscord keeps compatibility;
+  the callers should eventually migrate rather than having the warnings hidden.
+- ChannelTabs, Summarizer, and BDFDB missing-module/class warnings describe those
+  plugins' assumptions about a different Discord build. They do not indicate a
+  BetterDiscord bootstrap failure.
+- `Legacy readiness timeout reached` is an intentional compatibility diagnostic,
+  not an error. It confirms the current renderer omitted the readiness signal
+  expected by BetterDiscord 1.13.14 and that idle addons were released safely.
+
+New diagnostics are deliberately low-volume and do not include message content,
+authentication tokens, email addresses, or user/guild names. They report the
+renderer injection route once per document, native notification fallback
+installation/use once, module-resolution counts, exceptional module identifiers,
+and whether PingNotification's opt-in broad guild subscription was requested.
+
+The webpack eager-load fallback now stops immediately after the standard module
+filter succeeds and has a hard limit of 25 matching factories per wait. It never
+sends Discord API/Gateway requests itself, but executing a Discord factory can
+initialize Discord-owned code, so the bound prevents an overly broad plugin
+filter from triggering unbounded work.
+
+PingNotification's `autoSubscribeToAllServers` option is disabled by default in
+both runtime defaults and the settings schema. If explicitly enabled, it sends
+one internal `GUILD_SUBSCRIPTIONS_FLUSH` containing every joined guild and asks
+Discord for typing, activity, and thread subscriptions. That can increase
+Gateway traffic and is unnecessary for ordinary message pings; the plugin now
+warns with the guild count before dispatching it.
+
+No client modification can be represented as account-risk-free: BetterDiscord
+and plugins are unofficial client modifications, and Discord may change its
+rules or enforcement. This patch does not automate user actions, send messages,
+harvest credentials/tokens, bypass permissions, mass-call REST endpoints, or
+loop Gateway requests. The remaining elevated behaviors are local webpack
+instrumentation and the explicitly opt-in guild subscription described above.

@@ -528,7 +528,7 @@ function patchLegacyNotificationIPC(e) {
         value: !0
     });
     try {
-        t.invoke = n
+        t.invoke = n, console.debug("[BetterDiscord:LegacyCompatibility] Installed scoped native-notification IPC fallback.")
     } catch (o) {
         console.warn("[BetterDiscord:LegacyCompatibility] DiscordNative.ipc is immutable; native notification rejection handling could not be installed.", o)
     }

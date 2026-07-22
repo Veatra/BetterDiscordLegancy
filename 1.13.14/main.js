@@ -141,17 +141,17 @@ var a, r, f, _e, Ie, N, p, A, d, L = G(() => {
         }
         static _rendererInjections = new WeakSet;
         static _rendererInjectionTimers = new WeakMap;
-        static async injectRenderer(e) {
+        static async injectRenderer(e, s = "early-renderer IPC") {
             if (A || !e || e.isDestroyed?.() || !e.webContents || e.webContents.isDestroyed?.() || this._rendererInjections.has(e.webContents)) return;
-            let s = r.default.join(__dirname, "betterdiscord.js");
-            if (!a.default.existsSync(s)) return;
-            let i = a.default.readFileSync(s).toString();
+            let i = r.default.join(__dirname, "betterdiscord.js");
+            if (!a.default.existsSync(i)) return;
+            let n = a.default.readFileSync(i).toString();
             this._rendererInjections.add(e.webContents);
             try {
-                let n = await e.webContents.executeJavaScript(`
+                let c = await e.webContents.executeJavaScript(`
             (() => {
                 try {
-                    ${i}
+                    ${n}
                     return true;
                 } catch(error) {
                     console.error(error);
@@ -160,9 +160,10 @@ var a, r, f, _e, Ie, N, p, A, d, L = G(() => {
             })();
             //# sourceURL=betterdiscord/betterdiscord.js
         `);
-                if (!n) throw new Error("The BetterDiscord renderer returned an unsuccessful result")
-            } catch (n) {
-                this._rendererInjections.delete(e.webContents), console.error("[BetterDiscord:LegacyCompatibility] Renderer injection failed; a later navigation may retry.", n)
+                if (!c) throw new Error("The BetterDiscord renderer returned an unsuccessful result");
+                console.info(`[BetterDiscord:LegacyCompatibility] Renderer injection completed through ${s}.`)
+            } catch (c) {
+                this._rendererInjections.delete(e.webContents), console.error(`[BetterDiscord:LegacyCompatibility] Renderer injection through ${s} failed; a later navigation may retry.`, c)
             }
         }
         static setup(e) {
@@ -175,7 +176,7 @@ var a, r, f, _e, Ie, N, p, A, d, L = G(() => {
                     let s = this._rendererInjectionTimers.get(e.webContents);
                     s && clearTimeout(s), this._rendererInjections.delete(e.webContents), this._rendererInjectionTimers.set(e.webContents, setTimeout(() => {
                         this._rendererInjectionTimers.delete(e.webContents);
-                        this.injectRenderer(e)
+                        this.injectRenderer(e, "delayed dom-ready fallback")
                     }, 3e3));
                     A && (f.default.dialog.showMessageBox({
                         title: "Discord Crashed",

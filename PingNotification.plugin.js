@@ -469,7 +469,7 @@ const config = {
                     id: "autoSubscribeToAllServers",
                     name: "Auto Subscribe to All Servers on start",
                     note: "Discord recently made large servers load lazily, so this option will auto subscribe to all servers on start to ensure you don't miss any notifications. UNKNOWN IF THIS IS ENTIRELY SAFE. USE AT YOUR OWN RISK.",
-                    value: true
+                    value: false
                 },
                 {
                     type: "slider",
@@ -733,6 +733,15 @@ module.exports = class PingNotification {
             Webpack.waitForModule(x => MemberAreaAvatarFilter(x?.type), { searchExports: true })
         ]);
 
+        const resolvedStartupModuleCount = [
+            NotificationUtils, NotificationSoundModule, MessageConstructor,
+            transitionTo, Dispatcher, MessageActions, Message, PopoutModule,
+            trailingModule, DiscordProgressBar, constructMessageObj,
+            ChannelConstructor, useStateFromStores, appSidePanelSelectors,
+            hasThreadElementModule, messageReferenceSelectors, MemberAreaAvatar
+        ].filter(Boolean).length;
+        console.debug(`[PingNotification:LegacyCompatibility] Startup module resolution completed (${resolvedStartupModuleCount}/17 modules available).`);
+
         trailing = trailingModule.trailing;
         updateDOMReferences();
 
@@ -970,6 +979,7 @@ module.exports = class PingNotification {
 
     autoSubscribeToAllServers() {
         const servers = GuildStore.getGuildsArray();
+        console.warn(`[PingNotification] Auto-subscribe is enabled; dispatching one guild-subscription update for ${servers.length} guilds. Disable the advanced setting if broad typing/activity/thread subscriptions are not required.`);
         Dispatcher.dispatch({
             "type": "GUILD_SUBSCRIPTIONS_FLUSH",
             "subscriptions": {
