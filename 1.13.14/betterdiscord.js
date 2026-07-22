@@ -1,4 +1,25 @@
 "use strict";
+/*
+ * Legacy Electron compatibility:
+ * BetterDiscord 1.13.14 creates its webpack-readiness promise during bundle
+ * initialization. Chromium 108/109 does not provide Promise.withResolvers, so
+ * define the standards-compatible shape before any bundled module executes.
+ */
+typeof Promise.withResolvers != "function" && Object.defineProperty(Promise, "withResolvers", {
+    configurable: !0,
+    writable: !0,
+    value: function() {
+        let a, e;
+        let t = new this((t, o) => {
+            a = t, e = o
+        });
+        return {
+            promise: t,
+            resolve: a,
+            reject: e
+        }
+    }
+});
 var Lm = Object.create;
 var on = Object.defineProperty;
 var Im = Object.getOwnPropertyDescriptor;
@@ -1894,9 +1915,22 @@ var q, Et = v(() => {
 });
 
 function rt(a, e) {
-    let t = qh(e);
-    for (let o in a.declarations)
-        if (t(a.declarations[o])) return a.declarations[o]
+    let t = qh(e),
+        o = a?.declarations;
+    if (o)
+        for (let r in o)
+            if (t(o[r])) return o[r];
+    /*
+     * Legacy Discord factories cannot always be rewritten into declaration
+     * containers. Preserve declarationFilter's usefulness by inspecting the
+     * module export and its enumerable exports instead of throwing while
+     * iterating an absent declarations object.
+     */
+    let r = a?.exports;
+    if (r && t(r)) return r;
+    if (r && (typeof r == "object" || typeof r == "function"))
+        for (let n of Object.keys(r))
+            if (t(r[n])) return r[n]
 }
 
 function nt(a) {
@@ -2170,6 +2204,9 @@ var _, hn, Qd, Hh, _h, tl, Li, go, gn, ho = v(() => {
         let a = ne(e => e.appFirstRenderAfterReadyPayload);
         a ? q.after("WebpackRequire", a, "appFirstRenderAfterReadyPayload", qo) : (b.warn("WebpackModules", "Could not find appFirstRenderAfterReadyPayload"), requestIdleCallback(qo))
     }
+    setTimeout(() => {
+        Li > 0 && (b.warn("WebpackModules", "Legacy readiness timeout reached; allowing idle addons to load"), qo())
+    }, 3e3);
     gn = new Proxy({}, {
         ownKeys() {
             return Object.keys(_.m)
@@ -2401,7 +2438,7 @@ var ol, Zh, Xh, vn = v(() => {
 
 function Mt(a, e) {
     let t = Object.create(null),
-        o = Object.keys(a),
+        o = Object.keys(a ?? {}),
         r = Object.keys(e);
     for (let n = 0; n < o.length; n++) {
         let s = o[n];
@@ -2459,12 +2496,12 @@ function Mi(a, e = {}) {
 function ca(a, e, t = {}) {
     typeof a == "string" || a instanceof RegExp ? a = Ht(a) : Array.isArray(a) && (a = Ht(...a)), t.raw ??= t.mapDeclarations ?? !1;
     let o = typeof a == "number" ? Mi(a, t) : ne(a, t);
-    return o ? (t.raw && (o = o[t.mapDeclarations ? "declarations" : "exports"]), Mt(o, e)) : {}
+    return o ? (t.raw && (o = t.mapDeclarations ? o.declarations ?? o.exports : o.exports), Mt(o, e)) : {}
 }
 async function wn(a, e, t = {}) {
     typeof a == "string" || a instanceof RegExp ? a = Ht(a) : Array.isArray(a) && (a = Ht(...a)), t.raw ??= t.mapDeclarations ?? !1;
     let o = await Fe(a, t);
-    return o ? (t.raw && (o = o[t.mapDeclarations ? "declarations" : "exports"]), Mt(o, e)) : {}
+    return o ? (t.raw && (o = t.mapDeclarations ? o.declarations ?? o.exports : o.exports), Mt(o, e)) : {}
 }
 
 function Ti(a, e) {
@@ -2476,14 +2513,14 @@ function Ti(a, e) {
         raw: s = !1,
         map: d
     } = e;
-    if (t(a.exports, a, a.id)) return e.declarationFilter ? rt(a, e.declarationFilter) : e.mapDeclarations && e.map ? Mt(a.declarations, e.map) : d ? Mt(a.exports, d) : s ? a : a.exports;
+    if (t(a.exports, a, a.id)) return e.declarationFilter ? rt(a, e.declarationFilter) : e.mapDeclarations && e.map ? Mt(a.declarations ?? a.exports, e.map) : d ? Mt(a.exports, d) : s ? a : a.exports;
     let l, u = [];
     r ? u.push(...Object.keys(a.exports)) : n && (l = Ia(a)) && u.push(l);
     for (let c of u) {
         let f = a.exports[c];
         if (!nt(f) && t(f, a, a.id)) {
             if (e.declarationFilter) return rt(a, e.declarationFilter);
-            if (e.mapDeclarations && e.map) return Mt(a.declarations, e.map);
+            if (e.mapDeclarations && e.map) return Mt(a.declarations ?? a.exports, e.map);
             let m;
             return !o && l === c ? m = d ? Mt(a.exports, d) : s ? a : a.exports : m = d ? Mt(s ? a.exports : f, d) : s ? a : f, m
         }
@@ -14870,7 +14907,7 @@ function wt({
         value: u,
         disabled: c
     } = yx(Ie), f = u !== fe ? u : n, m = u !== fe ? c : r, h = ls(null), g = ls(null), y = ls(null), I = bx(E => {
-        o?.(E), s(E), g.current?.togglePopover(!1)
+        o?.(E), s(E), g.current?.togglePopover?.(!1)
     }, [o]);
     xx(() => {
         let E = h.current,
@@ -14878,7 +14915,7 @@ function wt({
         if (!E || !H) return;
         E.popoverTargetElement = H, E.popoverTargetAction = "toggle";
         let L = new IntersectionObserver(([T]) => {
-            T.isIntersecting || H.togglePopover(!1)
+            T.isIntersecting || H.togglePopover?.(!1)
         });
         return L.observe(E), () => {
             E && L.unobserve(E)
@@ -15131,7 +15168,7 @@ function Sx({
         if (!d || !l) return;
         d.popoverTargetElement = l, d.popoverTargetAction = "toggle";
         let u = new IntersectionObserver(([c]) => {
-            c.isIntersecting || l.togglePopover(!1)
+            c.isIntersecting || l.togglePopover?.(!1)
         });
         return u.observe(d), () => {
             d && u.unobserve(d)
