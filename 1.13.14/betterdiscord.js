@@ -2357,6 +2357,41 @@ var xn = v(() => {
     ho()
 });
 
+/*
+ * Legacy Discord can register a webpack factory long before any application
+ * path requires it. Modern plugins commonly wait for functions identified by
+ * source text, so waiting only for a future execution can deadlock plugin
+ * startup forever. For filters carrying BetterDiscord's own source metadata,
+ * execute only uninitialized factories which contain every requested token.
+ * Errors remain non-fatal: webpack's ordinary lazy listener stays registered.
+ */
+function legacyLoadRegisteredFactories(a) {
+    let e = a?.strings ?? a?.searches ?? a?.props ?? a?.fields;
+    if (!Array.isArray(e) || e.length === 0) return 0;
+    let t = 0,
+        o = Object.keys(_.m);
+    for (let r of o) {
+        if (Object.prototype.hasOwnProperty.call(_.c, r)) continue;
+        let n;
+        try {
+            n = String(_.m[r])
+        } catch {
+            continue
+        }
+        let s = e.every(d => {
+            if (typeof d == "string") return n.includes(d);
+            if (!(d instanceof RegExp)) return !1;
+            return d.lastIndex = 0, d.test(n)
+        });
+        if (s) try {
+            _(r), t++
+        } catch (d) {
+            b.debug("WebpackModules", `Legacy eager load could not execute registered module ${r}; leaving the normal lazy listener active.`, d)
+        }
+    }
+    return t
+}
+
 function Fe(a, e = {}) {
     let {
         signal: t,
@@ -2371,6 +2406,12 @@ function Fe(a, e = {}) {
     let u = ne(a, Object.assign({}, e, {
         fatal: !1
     }));
+    if (!u) {
+        let c = legacyLoadRegisteredFactories(a);
+        c > 0 && (b.debug("WebpackModules", `Legacy compatibility eagerly executed ${c} registered module candidate${c===1?"":"s"} for a pending source filter.`), u = ne(a, Object.assign({}, e, {
+            fatal: !1
+        })))
+    }
     return u ? Promise.resolve(u) : (a = La(a), new Promise((c, f) => {
         let m = () => void hn.delete(h),
             h = (g, y) => {

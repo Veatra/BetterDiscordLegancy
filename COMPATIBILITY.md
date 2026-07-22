@@ -98,3 +98,25 @@ lacking the HTML Popover API; close operations are now feature-tested so the
 observer no longer throws. The HTTP 400/401/404, Spotify WebSocket, and interrupted
 media playback messages in the log originate from Discord services or media,
 not BetterDiscord's webpack compatibility layer.
+
+## PingNotification startup after removing ZeresPluginLibrary
+
+The follow-up pre-start log confirms that BetterDiscord reaches the idle addon
+phase and no longer emits declaration-parser failures. The post-start capture
+does not contain a PingNotification exception or missing-module notification.
+Instead, the plugin remains inside its initial `Promise.all` of seventeen
+`Webpack.waitForModule` calls and never reaches its Dispatcher subscriptions.
+The later `MESSAGE_CREATE` stack is Discord's own desktop notification path; the
+`cannot invoke this event` rejection is from Discord Native notification IPC and
+does not contain a PingNotification frame.
+
+On this client, webpack can register lazy factories without executing them. The
+normal `waitForModule` implementation searches executed-module exports and then
+waits for a future execution. If the legacy UI never visits the feature which
+requires a registered factory, a source-based wait remains pending indefinitely.
+For BetterDiscord-created filters carrying `strings`, raw-source `searches`,
+export `props`, or prototype `fields` metadata, the compatibility path now scans
+unexecuted registered factories and requires only candidates containing every
+requested token. It then repeats the normal export/declaration search. Candidate
+errors are logged at debug level and retain the ordinary lazy listener, so a
+failed optional eager load does not reject a plugin or alter unrelated factories.
