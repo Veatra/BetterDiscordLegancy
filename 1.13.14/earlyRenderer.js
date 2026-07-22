@@ -205,6 +205,7 @@ function $(e) {
     return e >= 97 && e <= 122 || e >= 65 && e <= 90 || e >= 48 && e <= 57 || e === 95 || e === 36
 }
 var W = /^(.*?)\(/;
+var legacyIncompatibleFactoryWrapperWarningShown = !1;
 
 function N(e) {
     let t = e.match(W);
@@ -244,13 +245,15 @@ function N(e) {
                 if (m) return m;
                 try {
                     let f = Function.prototype.toString.call(u),
-                        B = f.indexOf("("),
+                        legacyFactoryWrapper = f.includes("Reflect.apply(originalModule");
+                    if (legacyFactoryWrapper) return legacyIncompatibleFactoryWrapperWarningShown || (legacyIncompatibleFactoryWrapperWarningShown = !0, C.warn("WebpackModules", "Detected a ZeresPluginLibrary webpack wrapper. Declaration instrumentation is disabled for wrapped modules because the original factory is held in an inaccessible closure. Plugins requiring declarationFilter, including PingNotification, require ZeresPluginLibrary to be removed.")), m = u;
+                    let B = f.indexOf("("),
                         b = f.slice(0, B),
                         d = Number(b),
                         g = isNaN(d) ? `misc/${b}.js` : `${Math.floor(d/1e3)}/${d}.js`,
                         h = N(f),
                         l = M(h),
-                        D = h.indexOf(")") + 2,
+                        D = h.indexOf("{", h.indexOf(")")) + 1,
                         x = `Object.seal({__proto__:null,${l.map(k=>`get ${k}(){return ${k}},set ${k}(_${k}){${k}=_${k}}`).join(",")}})`,
                         S = `(function(){
     /*

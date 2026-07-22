@@ -70,3 +70,31 @@ allowing a later navigation to retry, and emits a diagnostic prefixed with
   bypass that safety behavior.
 - To build a drop-in release, pack the contents of `1.13.14` as the ASAR root;
   `package.json` continues to select `main.js`.
+
+## PingNotification and the supplied console log
+
+The supplied log contains 984 declaration-parser failures. Every shown stack
+passes through `0PluginLibrary.plugin.js` at its webpack wrapper. That library
+replaces each factory with an arrow function which calls an `originalModule`
+closure. Recompiling the wrapper cannot work: the closure is not part of
+`Function#toString`, so even a syntactically valid reconstruction would lose the
+original factory reference. The early renderer now recognizes that exact
+wrapper, leaves it intact, and emits one actionable warning instead of attempting
+and logging a failed reconstruction for every Discord module.
+
+Current PingNotification also explicitly checks for ZeresPluginLibrary and says
+it will not work while that library is installed. For PingNotification popups,
+`0PluginLibrary.plugin.js` must therefore be removed (not merely disabled) and
+Discord restarted. This is required in addition to the BetterDiscord patches;
+BetterDiscord cannot recover a factory hidden in another plugin's lexical
+closure, and it should not break that plugin's wrapper to guess at the factory.
+
+The log's `Cannot convert undefined or null to object` comes from BetterDiscord's
+`mapDeclarations` path, not PingNotification. When early instrumentation cannot
+produce declarations, mapping now falls back to the module's exports and the
+low-level mapper safely accepts a missing source object. The repeated
+`togglePopover is not a function` error is caused by the legacy Chromium build
+lacking the HTML Popover API; close operations are now feature-tested so the
+observer no longer throws. The HTTP 400/401/404, Spotify WebSocket, and interrupted
+media playback messages in the log originate from Discord services or media,
+not BetterDiscord's webpack compatibility layer.
