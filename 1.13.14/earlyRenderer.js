@@ -1,4 +1,24 @@
 "use strict";
+/*
+ * This file executes in Discord's page world before betterdiscord.js. Install
+ * the ES2024 promise helper here as well as in the other entry points so an
+ * early bootstrap failure cannot depend on which isolated world ran first.
+ */
+typeof Promise.withResolvers != "function" && Object.defineProperty(Promise, "withResolvers", {
+    configurable: !0,
+    writable: !0,
+    value: function() {
+        let e, t;
+        let r = new this((r, i) => {
+            e = r, t = i
+        });
+        return {
+            promise: r,
+            resolve: e,
+            reject: t
+        }
+    }
+});
 var T = {
         err: "error",
         error: "error",

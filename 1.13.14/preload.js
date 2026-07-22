@@ -1,4 +1,26 @@
 "use strict";
+/*
+ * Legacy Electron compatibility:
+ * Discord Host 1.0.9036 embeds a JavaScript runtime from before
+ * Promise.withResolvers was standardized. Keep this shim in the preload
+ * context because the network bridge below can execute independently of the
+ * page context. The generic `this` behavior matches the native static method.
+ */
+typeof Promise.withResolvers != "function" && Object.defineProperty(Promise, "withResolvers", {
+    configurable: !0,
+    writable: !0,
+    value: function() {
+        let e, t;
+        let r = new this((r, n) => {
+            e = r, t = n
+        });
+        return {
+            promise: r,
+            resolve: e,
+            reject: t
+        }
+    }
+});
 var xe = Object.create;
 var j = Object.defineProperty;
 var Ee = Object.getOwnPropertyDescriptor;

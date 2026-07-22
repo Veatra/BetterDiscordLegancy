@@ -1,0 +1,72 @@
+# BetterDiscord 1.13.14 legacy Discord compatibility
+
+## Target
+
+This repository's patched release targets Discord stable **581831 (1f93028)**,
+host **1.0.9036 x86**, on Windows 8.1 (6.3.9600). The `1.13.12` directory is
+kept as the known-working baseline; changes are limited to `1.13.14`.
+
+## Confirmed compatibility gaps and retained behavior
+
+Version 1.13.14 introduced `earlyRenderer.js`. The preload executes that file
+in Discord's page, the script wraps webpack module factories, and it calls
+`BetterDiscordRunRenderer` only after observing a module whose exports include
+React's `createElement`. This is useful on current Discord because it exposes
+module declarations early and lets BetterDiscord observe lazily registered
+modules.
+
+The older Discord webpack runtime does not satisfy every runtime-shape check in
+that bootstrap (notably the `e.b` gate). In that case the script returns without
+ever calling `BetterDiscordRunRenderer`; consequently `betterdiscord.js` is
+present but is never evaluated. This is an injection lifecycle incompatibility,
+not a Windows API incompatibility in the renderer bundle itself.
+
+Version 1.13.14 also creates a webpack-readiness promise with
+`Promise.withResolvers()` while the renderer bundle is initializing. That API
+was added after the Chromium version embedded by Discord Host 1.0.9036. Unlike
+the same call in 1.13.12's preload network bridge, this new renderer call is on
+the startup path and can stop initialization immediately. A small, generic
+polyfill is therefore installed at the beginning of the preload, early page,
+and renderer entry points before bundled modules execute.
+
+Early module rewriting already has a fail-safe: the factory parser and generated
+factory evaluation are inside a `try`/`catch`, and a parsing failure returns the
+original factory. It should not be wrapped in another broad exception handler.
+However, original legacy factories do not receive a `declarations` container.
+The declaration-filter helper now treats that container as optional and, when it
+is absent, checks the module export and its enumerable exported values. This
+keeps newer `declarationFilter` consumers functional where the legacy factory
+shape permits it, without manufacturing declarations or changing normal modern
+results.
+
+Finally, the modern idle-addon lifecycle normally resolves after Discord emits
+`appFirstRenderAfterReadyPayload`. The legacy client may expose the module but
+never emit that newer metric. A three-second timeout resolves the existing
+readiness counter only if it remains pending, allowing `@runAt: "idle"` plugins
+to load without racing or double-resolving the normal path.
+
+The patch retains the 1.13.14 early bootstrap unchanged so plugins can still
+benefit when the runtime supports it. It also schedules the proven 1.13.12-style
+main-process injection three seconds after `dom-ready`. Both the modern IPC path
+and compatibility timer pass through one `WeakSet` guard, so whichever path wins
+injects exactly once per loaded document. On a later `dom-ready`, the guard is
+reset and any stale timer is cancelled so renderer reloads remain supported. A failed evaluation removes the guard,
+allowing a later navigation to retry, and emits a diagnostic prefixed with
+`[BetterDiscord:LegacyCompatibility]`.
+
+## Operational notes
+
+- The three-second delay intentionally gives Discord's legacy module graph time
+  to initialize. Plugins that query modules immediately may still need their
+  existing delayed-start workaround when Discord itself registers those modules
+  later.
+- The compatibility shims do not claim to synthesize modules that this Discord
+  build never loads. A plugin which requires a module absent from build 581831
+  must still degrade gracefully or be started after Discord loads that module.
+- The fallback does not disable lazy-module support, replace the 1.13.14 BdApi,
+  or substitute the older 1.13.12 renderer.
+- If Discord crashes the renderer, BetterDiscord's existing crash guard still
+  suppresses injection. The fallback calls the same guarded method and cannot
+  bypass that safety behavior.
+- To build a drop-in release, pack the contents of `1.13.14` as the ASAR root;
+  `package.json` continues to select `main.js`.

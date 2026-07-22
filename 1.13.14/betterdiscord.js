@@ -1,4 +1,25 @@
 "use strict";
+/*
+ * Legacy Electron compatibility:
+ * BetterDiscord 1.13.14 creates its webpack-readiness promise during bundle
+ * initialization. Chromium 108/109 does not provide Promise.withResolvers, so
+ * define the standards-compatible shape before any bundled module executes.
+ */
+typeof Promise.withResolvers != "function" && Object.defineProperty(Promise, "withResolvers", {
+    configurable: !0,
+    writable: !0,
+    value: function() {
+        let a, e;
+        let t = new this((t, o) => {
+            a = t, e = o
+        });
+        return {
+            promise: t,
+            resolve: a,
+            reject: e
+        }
+    }
+});
 var Lm = Object.create;
 var on = Object.defineProperty;
 var Im = Object.getOwnPropertyDescriptor;
@@ -1894,9 +1915,22 @@ var q, Et = v(() => {
 });
 
 function rt(a, e) {
-    let t = qh(e);
-    for (let o in a.declarations)
-        if (t(a.declarations[o])) return a.declarations[o]
+    let t = qh(e),
+        o = a?.declarations;
+    if (o)
+        for (let r in o)
+            if (t(o[r])) return o[r];
+    /*
+     * Legacy Discord factories cannot always be rewritten into declaration
+     * containers. Preserve declarationFilter's usefulness by inspecting the
+     * module export and its enumerable exports instead of throwing while
+     * iterating an absent declarations object.
+     */
+    let r = a?.exports;
+    if (r && t(r)) return r;
+    if (r && (typeof r == "object" || typeof r == "function"))
+        for (let n of Object.keys(r))
+            if (t(r[n])) return r[n]
 }
 
 function nt(a) {
@@ -2170,6 +2204,9 @@ var _, hn, Qd, Hh, _h, tl, Li, go, gn, ho = v(() => {
         let a = ne(e => e.appFirstRenderAfterReadyPayload);
         a ? q.after("WebpackRequire", a, "appFirstRenderAfterReadyPayload", qo) : (b.warn("WebpackModules", "Could not find appFirstRenderAfterReadyPayload"), requestIdleCallback(qo))
     }
+    setTimeout(() => {
+        Li > 0 && (b.warn("WebpackModules", "Legacy readiness timeout reached; allowing idle addons to load"), qo())
+    }, 3e3);
     gn = new Proxy({}, {
         ownKeys() {
             return Object.keys(_.m)
