@@ -9,6 +9,14 @@
  * @runAt idle
  */
 
+/*
+ * Windows 8.1 compatibility copy:
+ * This file tracks upstream PingNotification 9.4.5 at commit
+ * 537f66e3bccc94b34de4f646c1a272eadb9f0846. The compatibility changes keep
+ * asynchronous notification rendering failures attached to their Dispatcher
+ * event instead of producing context-free unhandled promise rejections.
+ */
+
 const { React, Webpack, ReactDOM, UI } = BdApi;
 const { createRoot } = ReactDOM;
 const { Patcher } = BdApi;
@@ -558,6 +566,7 @@ module.exports = class PingNotification {
         this.activeNotifications = [];
         this.sessionMessages = [];
         this.testNotificationData = null;
+        this.reportedNotificationRenderFailure = false;
 
         this.onMessageReceived = this.onMessageReceived.bind(this);
         this.messageThreadCreateHandler = this.messageThreadCreateHandler.bind(this);
@@ -580,6 +589,43 @@ module.exports = class PingNotification {
                 }
             ]
         });
+    }
+
+    /**
+     * Runs the asynchronous notification renderer with event-specific error
+     * context. Dispatcher does not await subscribers, so calling the async
+     * renderer directly loses failures as unhandled promise rejections.
+     *
+     * @param {object} messageEvent Raw Discord message or synthetic message.
+     * @param {object} channel Discord channel associated with the message.
+     * @param {object|boolean|undefined} notifyResult Notification decision data.
+     * @param {object|undefined} threadChannel Optional originating thread.
+     * @param {string|undefined} realId Optional real message identifier.
+     * @returns {Promise<HTMLElement|null>} The created notification element, or
+     * null when rendering failed after the failure was reported.
+     */
+    async showNotificationSafely(messageEvent, channel, notifyResult, threadChannel, realId) {
+        try {
+            return await this.showNotification(messageEvent, channel, notifyResult, threadChannel, realId);
+        }
+        catch (error) {
+            console.error("[PingNotification:LegacyCompatibility] Failed to render notification.", {
+                messageId: messageEvent?.id,
+                channelId: channel?.id ?? messageEvent?.channel_id,
+                guildId: channel?.guild_id,
+                error
+            });
+            if (!this.reportedNotificationRenderFailure) {
+                this.reportedNotificationRenderFailure = true;
+                UI.showNotification({
+                    title: "PingNotification",
+                    content: "A notification could not be rendered. See the console entry prefixed with `[PingNotification:LegacyCompatibility]` for the failing message and module context.",
+                    type: "error",
+                    duration: 30000
+                });
+            }
+            return null;
+        }
     }
 
     inMana(node) {
@@ -1300,18 +1346,18 @@ module.exports = class PingNotification {
         const notifyResult = this.shouldNotify(event.message, channel, currentUser);
         if (this.settings.keywordOnlyMode) {
             if (notifyResult?.isKeywordMatch === true) {
-                this.showNotification(event.message, channel, notifyResult);
+                this.showNotificationSafely(event.message, channel, notifyResult);
             }
 
         } else {
             if (!update) {
                 if (notifyResult && (notifyResult === true || notifyResult.notify === true)) {
-                    this.showNotification(event.message, channel, notifyResult);
+                    this.showNotificationSafely(event.message, channel, notifyResult);
                 }
             }
             else {
                 if (notifyResult?.isKeywordMatch === true) {
-                    this.showNotification(event.message, channel, notifyResult);
+                    this.showNotificationSafely(event.message, channel, notifyResult);
                 }
             }
         }
@@ -1353,7 +1399,7 @@ module.exports = class PingNotification {
             }
 
             this.sessionMessages.push({id: messageToConstruct.id, channel_id: channel.id, author: author.id, dummy: true, fullMessage: messageToConstruct});
-            this.showNotification(messageToConstruct, parentChannel, {notify: true}, channel);
+            this.showNotificationSafely(messageToConstruct, parentChannel, {notify: true}, channel);
             NotificationSoundModule.playNotificationSound("message1", 0.4);
         }
     }
@@ -1449,7 +1495,7 @@ module.exports = class PingNotification {
 
 
         this.sessionMessages.push({id: messageToConstruct.id, channel_id: channel.id, author: reacter.id, dummy: true, fullMessage: messageToConstruct});
-        this.showNotification(messageToConstruct, channel, {notify: true}, undefined, realId);
+        this.showNotificationSafely(messageToConstruct, channel, {notify: true}, undefined, realId);
         if (this.settings.simulateAudioNotificationReaction) {
             NotificationSoundModule.playNotificationSound("message1", 0.4);
         }

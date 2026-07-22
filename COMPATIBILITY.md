@@ -120,3 +120,35 @@ unexecuted registered factories and requires only candidates containing every
 requested token. It then repeats the normal export/declaration search. Candidate
 errors are logged at debug level and retain the ordinary lazy listener, so a
 failed optional eager load does not reject a plugin or alter unrelated factories.
+
+## Mention-only native notification rejection
+
+The latest post-start log contains one error, originating from Discord modules
+`530789` (`NotificationStore.MESSAGE_CREATE`), `479975` (`showNotification`), and
+`19575` (the renderer-to-host IPC bridge). It occurs for direct mentions,
+`@everyone`, `@here`, role mentions, and channels configured for every-message
+notifications because those are precisely the messages for which Discord also
+attempts to create an operating-system notification. Keyword-only matches create
+the plugin's in-app popup but do not enter Discord's native notification path,
+which explains why they do not produce the error.
+
+Host 1.0.9036 does not register the renderer's newer
+`DISCORD_NOTIFICATIONS_SEND_NOTIFICATION` IPC event and rejects it with
+`cannot invoke this event`. The preload now wraps only that event. On that exact
+capability rejection it returns Discord's documented `{delivered: false}` shape,
+allowing Discord's own notification utility to continue to its HTML5 fallback.
+Other IPC events and other notification errors are rethrown unchanged, and one
+diagnostic is emitted when the fallback is first used.
+
+The repository also carries the pinned PingNotification 9.4.5 source as a
+drop-in plugin. Its Dispatcher callbacks now route asynchronous popup creation
+through `showNotificationSafely`, which attaches message, channel, and guild
+context to genuine plugin rendering failures and reports the first failure in
+the UI. This does not suppress Discord's native error; it distinguishes future
+plugin failures from host IPC failures.
+
+The pre-start `EADDRINUSE` message indicates another Discord/RPC process already
+owns port 6463; Discord recovers by selecting port 6464. ChannelTabs, Summarizer,
+BDFDB selector warnings, overlay installation, Spotify authorization, and source
+map 404 messages are separate plugin, native-module, or service compatibility
+issues and do not block PingNotification's in-app popup.

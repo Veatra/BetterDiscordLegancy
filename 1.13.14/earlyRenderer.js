@@ -205,7 +205,7 @@ function $(e) {
     return e >= 97 && e <= 122 || e >= 65 && e <= 90 || e >= 48 && e <= 57 || e === 95 || e === 36
 }
 var W = /^(.*?)\(/;
-var legacyIncompatibleFactoryWrapperWarningShown = !1;
+var legacyClosureBackedFactoryWrapperWarningShown = !1;
 
 function N(e) {
     let t = e.match(W);
@@ -246,7 +246,7 @@ function N(e) {
                 try {
                     let f = Function.prototype.toString.call(u),
                         legacyFactoryWrapper = f.includes("Reflect.apply(originalModule");
-                    if (legacyFactoryWrapper) return legacyIncompatibleFactoryWrapperWarningShown || (legacyIncompatibleFactoryWrapperWarningShown = !0, C.warn("WebpackModules", "Detected a ZeresPluginLibrary webpack wrapper. Declaration instrumentation is disabled for wrapped modules because the original factory is held in an inaccessible closure. Plugins requiring declarationFilter, including PingNotification, require ZeresPluginLibrary to be removed.")), m = u;
+                    if (legacyFactoryWrapper) return legacyClosureBackedFactoryWrapperWarningShown || (legacyClosureBackedFactoryWrapperWarningShown = !0, C.warn("WebpackModules", "Detected a closure-backed third-party webpack wrapper. Declaration instrumentation is disabled for wrapped modules because the original factory is inaccessible; export-based compatibility fallbacks remain available.")), m = u;
                     let B = f.indexOf("("),
                         b = f.slice(0, B),
                         d = Number(b),
