@@ -1,4 +1,14 @@
 "use strict";
+/*
+ * Windows 8.1 / Discord 1.0.9036 compatibility note:
+ *
+ * BetterDiscord 1.13.14 normally asks earlyRenderer.js to start the renderer
+ * through IPC after Discord executes its React webpack module.  The webpack
+ * runtime shipped by stable 581831 predates assumptions made by that hook, so
+ * it can legitimately never send the IPC request.  The guarded, delayed
+ * dom-ready fallback below preserves the early hook for newer/lazy modules
+ * while restoring the 1.13.12 injection path for this legacy client.
+ */
 var xe = Object.create;
 var R = Object.defineProperty;
 var Ne = Object.getOwnPropertyDescriptor;
@@ -129,15 +139,19 @@ var a, r, f, _e, Ie, N, p, A, d, L = G(() => {
             let e = r.default.join(p, "data");
             a.default.existsSync(p) || a.default.mkdirSync(p), a.default.existsSync(e) || a.default.mkdirSync(e), a.default.existsSync(r.default.join(e, "stable")) || a.default.mkdirSync(r.default.join(e, "stable")), a.default.existsSync(r.default.join(e, "canary")) || a.default.mkdirSync(r.default.join(e, "canary")), a.default.existsSync(r.default.join(e, "ptb")) || a.default.mkdirSync(r.default.join(e, "ptb")), a.default.existsSync(r.default.join(e, "development")) || a.default.mkdirSync(r.default.join(e, "development")), a.default.existsSync(r.default.join(p, "plugins")) || a.default.mkdirSync(r.default.join(p, "plugins")), a.default.existsSync(r.default.join(p, "themes")) || a.default.mkdirSync(r.default.join(p, "themes"))
         }
-        static async injectRenderer(e) {
-            if (A) return;
-            let s = r.default.join(__dirname, "betterdiscord.js");
-            if (!a.default.existsSync(s)) return;
-            let i = a.default.readFileSync(s).toString();
-            await e.webContents.executeJavaScript(`
+        static _rendererInjections = new WeakSet;
+        static _rendererInjectionTimers = new WeakMap;
+        static async injectRenderer(e, s = "early-renderer IPC") {
+            if (A || !e || e.isDestroyed?.() || !e.webContents || e.webContents.isDestroyed?.() || this._rendererInjections.has(e.webContents)) return;
+            let i = r.default.join(__dirname, "betterdiscord.js");
+            if (!a.default.existsSync(i)) return;
+            let n = a.default.readFileSync(i).toString();
+            this._rendererInjections.add(e.webContents);
+            try {
+                let c = await e.webContents.executeJavaScript(`
             (() => {
                 try {
-                    ${i}
+                    ${n}
                     return true;
                 } catch(error) {
                     console.error(error);
@@ -145,7 +159,12 @@ var a, r, f, _e, Ie, N, p, A, d, L = G(() => {
                 }
             })();
             //# sourceURL=betterdiscord/betterdiscord.js
-        `)
+        `);
+                if (!c) throw new Error("The BetterDiscord renderer returned an unsuccessful result");
+                console.info(`[BetterDiscord:LegacyCompatibility] Renderer injection completed through ${s}.`)
+            } catch (c) {
+                this._rendererInjections.delete(e.webContents), console.error(`[BetterDiscord:LegacyCompatibility] Renderer injection through ${s} failed; a later navigation may retry.`, c)
+            }
         }
         static setup(e) {
             try {
@@ -154,6 +173,11 @@ var a, r, f, _e, Ie, N, p, A, d, L = G(() => {
                 process.env.DISCORD_RELEASE_CHANNEL = "stable"
             }
             if (process.env.BD_DISCORD_PRELOAD = e.__originalPreload, process.env.DISCORD_APP_PATH = Ie, process.env.DISCORD_USER_DATA = f.default.app.getPath("userData"), process.env.BETTERDISCORD_DATA_PATH = p, e.webContents.on("dom-ready", () => {
+                    let s = this._rendererInjectionTimers.get(e.webContents);
+                    s && clearTimeout(s), this._rendererInjections.delete(e.webContents), this._rendererInjectionTimers.set(e.webContents, setTimeout(() => {
+                        this._rendererInjectionTimers.delete(e.webContents);
+                        this.injectRenderer(e, "delayed dom-ready fallback")
+                    }, 3e3));
                     A && (f.default.dialog.showMessageBox({
                         title: "Discord Crashed",
                         type: "warning",
