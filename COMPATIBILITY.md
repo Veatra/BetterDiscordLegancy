@@ -132,13 +132,13 @@ attempts to create an operating-system notification. Keyword-only matches create
 the plugin's in-app popup but do not enter Discord's native notification path,
 which explains why they do not produce the error.
 
-Host 1.0.9036 does not register the renderer's newer
-`DISCORD_NOTIFICATIONS_SEND_NOTIFICATION` IPC event and rejects it with
-`cannot invoke this event`. The preload now wraps only that event. On that exact
-capability rejection it returns Discord's documented `{delivered: false}` shape,
-allowing Discord's own notification utility to continue to its HTML5 fallback.
-Other IPC events and other notification errors are rethrown unchanged, and one
-diagnostic is emitted when the fallback is first used.
+Host 1.0.9036 does not register the renderer's newer notification delivery and
+native-module status IPC events and rejects them with `cannot invoke this event`.
+The preload handles those two events with their caller-specific shapes:
+`NOTIFICATIONS_SEND_NOTIFICATION` returns `{delivered: false}` so Discord can use
+its HTML5 fallback, while `NOTIFICATIONS_GET_MODULE_STATUS` returns `null` so the
+renderer treats the optional native module as unavailable. Other IPC events and
+other notification errors retain their original rejection behavior.
 
 The repository also carries the pinned PingNotification 9.4.5 source as a
 drop-in plugin. Its Dispatcher callbacks now route asynchronous popup creation

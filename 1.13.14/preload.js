@@ -494,14 +494,15 @@ var {
     exposeInMainWorld: tt
 } = _.default.contextBridge, G, F, H = !1, A = et("developer", "devToolsWarning");
 typeof A != "boolean" && (A = !1);
-var legacyNotificationIPCWarningShown = !1, legacyNotificationIPCUnexpectedChannelWarningShown = !1;
+var legacyNotificationIPCWarningShown = !1, legacyNotificationIPCStatusWarningShown = !1, legacyNotificationIPCUnexpectedChannelWarningShown = !1;
 
 /*
  * Discord's current renderer invokes the modern native notification event,
  * while Host 1.0.9036 does not register that IPC handler. Convert only that
- * known host-capability rejection into the `{delivered: false}` contract used
- * by Discord's notification utility. Discord can then continue to its HTML5
- * fallback instead of leaking an unhandled rejection for every real mention.
+ * known host-capability rejection into the event-specific fallback expected by
+ * Discord's notification utility. Delivery uses `{delivered: false}` while the
+ * optional native-module status probe uses `null`; unrelated notification IPC
+ * methods retain their original failures rather than receiving a wrong shape.
  */
 function patchLegacyNotificationIPC(e) {
     let t = e?.ipc;
@@ -538,15 +539,21 @@ function patchLegacyNotificationIPC(e) {
 function handleLegacyNotificationIPCFailure(e, t, r) {
     let n = String(t?.message ?? t),
         o = typeof e == "string" ? e : "<non-string-channel>",
-        i = o.toUpperCase().includes("NOTIFICATION"),
-        a = n.toLowerCase().includes("cannot invoke this event");
-    if (!i || !a) {
-        if (a && !legacyNotificationIPCUnexpectedChannelWarningShown && (legacyNotificationIPCUnexpectedChannelWarningShown = !0, console.warn("[BetterDiscord:LegacyCompatibility] Observed an unsupported non-notification IPC event; leaving it rejected.", {
+        i = o.toUpperCase().replace(/^DISCORD_/, ""),
+        a = n.toLowerCase().includes("cannot invoke this event"),
+        s = i === "NOTIFICATIONS_SEND_NOTIFICATION",
+        l = i === "NOTIFICATIONS_GET_MODULE_STATUS";
+    if (!a || !s && !l) {
+        if (a && !legacyNotificationIPCUnexpectedChannelWarningShown && (legacyNotificationIPCUnexpectedChannelWarningShown = !0, console.warn("[BetterDiscord:LegacyCompatibility] Observed an unsupported IPC event outside the two notification compatibility cases; leaving it rejected.", {
             channel: o,
             synchronous: r
         })), r) throw t;
         return Promise.reject(t)
     }
+    if (l) return legacyNotificationIPCStatusWarningShown || (legacyNotificationIPCStatusWarningShown = !0, console.debug("[BetterDiscord:LegacyCompatibility] Host 1.0.9036 has no current native-notification module status endpoint; reporting the module as unavailable.", {
+        channel: o,
+        synchronous: r
+    })), Promise.resolve(null);
     return legacyNotificationIPCWarningShown || (legacyNotificationIPCWarningShown = !0, console.warn("[BetterDiscord:LegacyCompatibility] Host 1.0.9036 rejected native notification delivery; returning the non-delivery fallback.", {
         channel: o,
         synchronous: r
