@@ -12,6 +12,13 @@
  * @updateUrl https://mwittrien.github.io/BetterDiscordAddons/Library/0BDFDB.plugin.js
  */
 
+/*
+ * Windows 8.1 / Discord Host 1.0.9036 compatibility copy:
+ * Keep BDFDB's public API and remote data format intact. The changes below add
+ * guarded legacy webpack lookup, two renamed class aliases, and fail-safe
+ * desktop notification handling without suppressing unrelated errors.
+ */
+
 module.exports = (_ => {
 	if (window.BDFDB_Global && window.BDFDB_Global.PluginUtils && typeof window.BDFDB_Global.PluginUtils.cleanUp == "function") window.BDFDB_Global.PluginUtils.cleanUp(window.BDFDB_Global);
 	
@@ -1243,6 +1250,10 @@ module.exports = (_ => {
 					else if (!config.all && !defaultExport && Cache.modules[type].module[cacheString]) return Cache.modules[type].module[cacheString];
 					else {
 						let m = BDFDB.ModuleUtils.find(filter, config);
+						if (!m && type.indexOf("string") > -1 && !config.all && !config.onlySearchUnloaded) {
+							m = BDFDB.ModuleUtils.find(filter, Object.assign({}, config, {onlySearchUnloaded: true, noWarnings: true}));
+							if (m) BDFDB.LogUtils.log(["[LegacyCompatibility] Resolved registered but unexecuted source module for", cacheString]);
+						}
 						if (m) {
 							if (!config.all) {
 								if (defaultExport) Cache.modules[type].export[cacheString] = m;
@@ -1908,9 +1919,19 @@ module.exports = (_ => {
 						let audio = new Audio();
 						if (!muted && data.config.sound) {
 							audio.src = data.config.sound;
-							audio.play();
+							let playResult = audio.play();
+							if (playResult && typeof playResult.catch == "function") playResult.catch(error => {
+								if (error && error.name != "AbortError") BDFDB.LogUtils.warn(["[LegacyCompatibility] Desktop notification sound could not be played.", error]);
+							});
 						}
-						let notification = new Notification(data.content, data.config);
+						let notification;
+						try {notification = new Notification(data.content, data.config);}
+						catch (error) {
+							DesktopNotificationQueue.running = false;
+							BDFDB.LogUtils.warn(["[LegacyCompatibility] Desktop notification construction failed; using an in-app toast instead.", error]);
+							BDFDB.NotificationUtils.toast(data.content, data.config);
+							return BDFDB.TimeUtils.timeout(runQueue, 1000);
+						}
 						
 						let disableInteractions = data.config.disableInteractions && typeof data.config.onClick != "function";
 						if (disableInteractions) notification.onclick = _ => {};
@@ -4606,6 +4627,14 @@ module.exports = (_ => {
 				for (let item in InternalData.DiscordClassModules) if (!DiscordClassModules[item]) DiscordClassModules[item] = undefined;
 				
 				const DiscordClasses = Object.assign({}, InternalData.DiscordClasses);
+				const legacyDiscordClassAliases = {
+					userheaderclickableusername: "userheadernicknameclickable",
+					userheadernicknamewithstyle: "userheadernickname"
+				};
+				for (let legacyClassName in legacyDiscordClassAliases) {
+					let currentClassName = legacyDiscordClassAliases[legacyClassName];
+					if (DiscordClasses[legacyClassName] === undefined && DiscordClasses[currentClassName] !== undefined) DiscordClasses[legacyClassName] = DiscordClasses[currentClassName];
+				}
 				BDFDB.DiscordClasses = Object.assign({}, DiscordClasses);
 				Internal.getDiscordClass = function (item, selector) {
 					let className, fallbackClassName, notFoundAndLazyloaded = false;
