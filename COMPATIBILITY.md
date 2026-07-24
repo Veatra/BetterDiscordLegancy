@@ -187,6 +187,22 @@ sends Discord API/Gateway requests itself, but executing a Discord factory can
 initialize Discord-owned code, so the bound prevents an overly broad plugin
 filter from triggering unbounded work.
 
+## Destroyed-window timer race
+
+The legacy delayed renderer fallback is scheduled three seconds after
+`dom-ready`. If Discord replaces, reloads, or closes that window during the
+delay, Electron destroys its `BrowserWindow`/`webContents` object. Accessing the
+destroyed window from the timer previously escaped as a main-process
+`TypeError: Object has been destroyed` dialog. This is a lifecycle race rather
+than a property of the ping message that happened near it.
+
+The main-process compatibility path now captures the original `webContents`,
+checks it before the timer and injection, cancels the timer on `destroyed`, and
+removes application-level protocol listeners associated with the dead window.
+Other sends use a destruction-aware helper so a close between the check and
+Electron's `send()` call remains non-fatal. No notification, Gateway, message,
+or account behavior is changed.
+
 PingNotification's `autoSubscribeToAllServers` option is disabled by default in
 both runtime defaults and the settings schema. If explicitly enabled, it sends
 one internal `GUILD_SUBSCRIPTIONS_FLUSH` containing every joined guild and asks

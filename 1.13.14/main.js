@@ -141,17 +141,35 @@ var a, r, f, _e, Ie, N, p, A, d, L = G(() => {
         }
         static _rendererInjections = new WeakSet;
         static _rendererInjectionTimers = new WeakMap;
-        static async injectRenderer(e, s = "early-renderer IPC") {
-            if (A || !e || e.isDestroyed?.() || !e.webContents || e.webContents.isDestroyed?.() || this._rendererInjections.has(e.webContents)) return;
-            let i = r.default.join(__dirname, "betterdiscord.js");
-            if (!a.default.existsSync(i)) return;
-            let n = a.default.readFileSync(i).toString();
-            this._rendererInjections.add(e.webContents);
+        static getUsableWebContents(e) {
+            if (!e || e.isDestroyed?.()) return null;
             try {
-                let c = await e.webContents.executeJavaScript(`
+                let s = e.webContents;
+                return !s || s.isDestroyed?.() ? null : s
+            } catch {
+                return null
+            }
+        }
+        static sendToWebContents(e, ...s) {
+            if (!e || e.isDestroyed?.()) return !1;
+            try {
+                return e.send(...s), !0
+            } catch {
+                return !1
+            }
+        }
+        static async injectRenderer(e, s = "early-renderer IPC") {
+            let i = this.getUsableWebContents(e);
+            if (A || !i || this._rendererInjections.has(i)) return;
+            let n = r.default.join(__dirname, "betterdiscord.js");
+            if (!a.default.existsSync(n)) return;
+            let c = a.default.readFileSync(n).toString();
+            this._rendererInjections.add(i);
+            try {
+                let u = await i.executeJavaScript(`
             (() => {
                 try {
-                    ${n}
+                    ${c}
                     return true;
                 } catch(error) {
                     console.error(error);
@@ -160,10 +178,10 @@ var a, r, f, _e, Ie, N, p, A, d, L = G(() => {
             })();
             //# sourceURL=betterdiscord/betterdiscord.js
         `);
-                if (!c) throw new Error("The BetterDiscord renderer returned an unsuccessful result");
+                if (!u) throw new Error("The BetterDiscord renderer returned an unsuccessful result");
                 console.info(`[BetterDiscord:LegacyCompatibility] Renderer injection completed through ${s}.`)
-            } catch (c) {
-                this._rendererInjections.delete(e.webContents), console.error(`[BetterDiscord:LegacyCompatibility] Renderer injection through ${s} failed; a later navigation may retry.`, c)
+            } catch (u) {
+                this._rendererInjections.delete(i), i.isDestroyed?.() || console.error(`[BetterDiscord:LegacyCompatibility] Renderer injection through ${s} failed; a later navigation may retry.`, u)
             }
         }
         static setup(e) {
@@ -172,12 +190,17 @@ var a, r, f, _e, Ie, N, p, A, d, L = G(() => {
             } catch {
                 process.env.DISCORD_RELEASE_CHANNEL = "stable"
             }
-            if (process.env.BD_DISCORD_PRELOAD = e.__originalPreload, process.env.DISCORD_APP_PATH = Ie, process.env.DISCORD_USER_DATA = f.default.app.getPath("userData"), process.env.BETTERDISCORD_DATA_PATH = p, e.webContents.on("dom-ready", () => {
-                    let s = this._rendererInjectionTimers.get(e.webContents);
-                    s && clearTimeout(s), this._rendererInjections.delete(e.webContents), this._rendererInjectionTimers.set(e.webContents, setTimeout(() => {
-                        this._rendererInjectionTimers.delete(e.webContents);
-                        this.injectRenderer(e, "delayed dom-ready fallback")
-                    }, 3e3));
+            let s = this.getUsableWebContents(e);
+            if (!s) return console.warn("[BetterDiscord:LegacyCompatibility] Skipped setup for a destroyed Discord window.");
+            process.env.BD_DISCORD_PRELOAD = e.__originalPreload, process.env.DISCORD_APP_PATH = Ie, process.env.DISCORD_USER_DATA = f.default.app.getPath("userData"), process.env.BETTERDISCORD_DATA_PATH = p;
+            let i = () => {
+                    if (s.isDestroyed?.()) return;
+                    let n = this._rendererInjectionTimers.get(s);
+                    n && clearTimeout(n), this._rendererInjections.delete(s);
+                    let c = setTimeout(() => {
+                        this._rendererInjectionTimers.delete(s), s.isDestroyed?.() || this.injectRenderer(e, "delayed dom-ready fallback")
+                    }, 3e3);
+                    this._rendererInjectionTimers.set(s, c);
                     A && (f.default.dialog.showMessageBox({
                         title: "Discord Crashed",
                         type: "warning",
@@ -189,19 +212,28 @@ This may have been caused by a plugin. Try moving all of your plugins outside th
                     }).then(s => {
                         s.response === 0 && (f.default.app.relaunch(), f.default.app.exit()), s.response === 1 && (process.platform === "win32" ? (0, _e.spawn)("explorer.exe", [r.default.join(p, "plugins")]) : f.default.shell.openPath(r.default.join(p, "plugins")))
                     }), A = !1)
-                }), e.webContents.on("did-navigate-in-page", () => {
-                    e.webContents.send(Y)
-                }), e.webContents.on("render-process-gone", () => {
+                },
+                n = () => {
+                    this.sendToWebContents(s, Y)
+                },
+                c = () => {
                     A = !0
-                }), f.default.app.setAsDefaultProtocolClient("betterdiscord")) {
+                },
+                u = (e, i) => {
+                    i.startsWith("betterdiscord://") && this.sendToWebContents(s, b, i)
+                },
+                l = (e, i) => {
+                    if (i.includes("--multi-instance")) return;
+                    let n = i.find(c => c.startsWith("betterdiscord://"));
+                    n && this.sendToWebContents(s, b, n)
+                },
+                d = () => {
+                    let e = this._rendererInjectionTimers.get(s);
+                    e && (clearTimeout(e), console.debug("[BetterDiscord:LegacyCompatibility] Cancelled delayed renderer injection because its Discord window was destroyed.")), this._rendererInjectionTimers.delete(s), this._rendererInjections.delete(s), f.default.app.removeListener("open-url", u), f.default.app.removeListener("second-instance", l)
+                };
+            if (s.on("dom-ready", i), s.on("did-navigate-in-page", n), s.on("render-process-gone", c), s.once("destroyed", d), f.default.app.setAsDefaultProtocolClient("betterdiscord")) {
                 let s = process.argv.find(i => i.startsWith("betterdiscord://"));
-                s && (process.env.BETTERDISCORD_PROTOCOL = s), f.default.app.on("open-url", (i, n) => {
-                    n.startsWith("betterdiscord://") && e.webContents.send(b, n)
-                }), f.default.app.on("second-instance", (i, n) => {
-                    if (n.includes("--multi-instance")) return;
-                    let c = n.find(u => u.startsWith("betterdiscord://"));
-                    c && e.webContents.send(b, c)
-                })
+                s && (process.env.BETTERDISCORD_PROTOCOL = s), f.default.app.on("open-url", u), f.default.app.on("second-instance", l)
             }
         }
         static disableMediaKeys() {
